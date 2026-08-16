@@ -4,12 +4,11 @@
 
 ## 设计目标
 
-1. **超轻量** —— 单一 Go 静态二进制；仅一个外部模块（`golang.org/x/net/html`）；
-   无运行时服务，无需 GPU。
+1. **超轻量** —— 单一 Go 静态二进制；仅两个小型模块（`golang.org/x/net/html`、
+   `github.com/ledongthuc/pdf`）；无运行时服务，无需 GPU，无向量化模型服务。
 2. **超精确** —— 输出确定性（排序后的链接、预先分配的合法文件名、SHA-256
-   校验）、严格的 PDF 校验、原子写入。
-3. **资源受限** —— 默认并发为逻辑 CPU 的 60%，所有响应体都有大小上限，不会
-   挤占宿主机器资源。
+   校验）、严格的 PDF 校验、原子写入，且检索会为每个片段返回源 PDF。
+3. **资源受限** —— 默认并发为逻辑 CPU 的 60%，所有响应体都有大小上限。
 4. **安全** —— URL 校验、文件名清洗、路径包含防护、所有 I/O 均有超时、代码中
    不含密钥。
 
@@ -22,56 +21,61 @@ internal/fetch/    礼貌、带重试的 HTTP 客户端（UA、退避、大小�
 internal/crawl/    同站 BFS 发现 PDF 链接。
 internal/download/ 受限工作池：流式下载、原子写入、sha256、断点续传。
 internal/manifest/ JSON 清单（原子写入）。
-internal/app/      组合根，端到端串联整个流程。
+internal/text/     PDF → 文本抽取（pdftotext + 纯 Go 回退）+ 分词器。
+internal/chunk/    按段落/句子分块，附带来源元数据。
+internal/index/    BM25 索引：构建、检索、JSON 持久化。
+internal/ingest/   编排 manifest → 文本 → 分块 → 索引 → 保存。
+internal/query/    加载索引并渲染排名 + 引用结果。
+internal/app/      scrape 流水线的组合根。
 ```
 
-依赖方向严格且无环：
-
-```
-app ──► config, fetch, crawl, download, manifest
-```
-
-下层包绝不反向导入上层包；每个包都自行声明其协作方所需的最小接口
-（`crawl.Fetcher`、`download.Fetcher`），从而可用 stub 做单元测试。
+依赖方向严格且无环；下层包绝不反向导入上层包，每个包都自行声明其协作方所需的
+最小接口（`crawl.Fetcher`、`download.Fetcher`、`text.Extractor`）以便测试。
 
 ## 关键决策
 
 ### 60% CPU 预算
 
 `config.AutoConcurrency` 计算 `int(0.6 * NumCPU)`，下限为 1。下载器使用恰好
-这么多个 worker。在参考机器（Ryzen 7 3700U，8 逻辑核）上即 4 个 worker。
-内存通过单文件大小上限与流式拷贝（绝不整份缓冲 PDF）来约束。
+这么多个 worker。内存通过单文件大小上限与流式拷贝来约束。
 
 ### 重试与礼貌
 
-`fetch.Client` 强制执行请求间最小间隔（默认 250 ms），并对瞬时失败 —— 网络
-错误、408/429、5xx —— 做指数退避重试。取消或 4xx（除 408/429 外）不重试。
-每个请求都携带真实 User-Agent 与单次请求超时。
+`fetch.Client` 强制执行请求间最小间隔，并对瞬时失败（网络错误、408/429、5xx）
+做指数退避重试。取消或非瞬时的 4xx 不重试。
 
 ### 确定性命名
 
 `download.assignNames` 在任何 worker 启动前就把每个 URL 映射到文件名，因此
-结果与 goroutine 调度无关、可复现。冲突时追加短 SHA-256 后缀。文件名由
-`sanitizeName` 从 URL 基名清洗：替换非法字符、保证 `.pdf` 后缀，并由
-`safeJoin` 拒绝任何可能逃逸输出目录的名称。
+结果与 goroutine 调度无关、可复现。冲突时追加短 SHA-256 后缀；`sanitizeName`
+替换非法字符，`safeJoin` 拒绝任何可能逃逸输出目录的名称。
 
-### 尽力而为的发现
+### 文本抽取（可插拔）
 
-`crawl.Crawler` 按深度上限对同站 HTML 页面做广度优先遍历。非起始页失败会被
-跳过（继续抓取）；只有起始页失败才是致命的。站外 PDF 链接（如学术站点）会被
-记录，但不会继续抓取进去。
+`text.Default()` 在存在 poppler `pdftotext` 时优先使用（对学术 PDF 保真度最高），
+否则回退到纯 Go 解析器。选择抽象为 `Extractor` 接口，日后可换入 OCR 或其他后端。
+无文本层的 PDF（扫描件）会被跳过并记录为 `no_text`。
+
+### 检索（BM25）
+
+`index.Build` 对每个片段分词并构建倒排索引（词项 postings + 文档长度）。
+`index.Search` 用 BM25（k1=1.5，b=0.75）对片段打分，且文档与查询使用同一分词器，
+保证分词一致。对约 20 篇论文的语料，整个索引常驻内存，查询为微秒级。分词器保留
+交易术语，丢弃一个小型英文停用词表。
 
 ### 数据契约
 
-`manifest.json` 是交接给 RAG 阶段的机器可读产物。对每份已发现 PDF 记录：源
-URL、最终（重定向后）URL、本地路径、大小、SHA-256、Content-Type、状态
-（`downloaded` / `skipped` / `failed`）、发现页面、锚文本标题与抓取时间。
+- `data/manifest.json` —— 每份 PDF 的下载结果（URL、最终 URL、本地路径、大小、
+  SHA-256、Content-Type、状态、发现页面、标题、抓取时间）。
+- `data/index.json` —— BM25 索引：所有片段（含来源元数据）加 postings 与文档
+  长度，原子写入。
 
 ## 路线图
 
-1. **Scraper**（已交付）—— `vellum scrape` → `data/manifest.json`。
-2. **Ingest** —— 从 PDF 抽取文本、分块、构建混合索引（BM25 词法检索 + 轻量
-   稠密嵌入；仍为 CPU-only）。
-3. **Query** —— `vellum query "..."` 返回带引用的排序片段。
-4. **Skill** —— 把 query CLI 封装为 Reasonix skill，让宿主 agent 基于检索到的
-   上下文作答，无需额外的 LLM API key 或本地模型服务。
+1. ✅ **Scrape** —— `vellum scrape` → `data/manifest.json`。
+2. ✅ **Ingest** —— `vellum ingest` → `data/index.json`（文本 → 分块 → BM25）。
+3. ✅ **Query** —— `vellum query "..."` → 排名 + 引用片段。
+4. ✅ **Skill** —— `/vellum-rag` 封装 `vellum query`；宿主 agent 依据检索证据
+   作答，无需额外 LLM / 向量化 API key。
+5. **未来** —— 在 `Extractor` / 索引接口之后加入稠密（语义）嵌入、扫描件 OCR，
+   以及 `vellum serve` HTTP 接口。

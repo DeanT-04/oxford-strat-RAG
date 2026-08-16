@@ -1,7 +1,8 @@
-// Command vellum is the CLI for the Oxford Strat research tool. Its first
-// subcommand, "scrape", crawls oxfordstrat.com and downloads every PDF.
-// Later subcommands (ingest, query, serve) will build the RAG layer on top
-// of the manifest produced here.
+// Command vellum is the CLI for the Oxford Strat research tool.
+//
+//	vellum scrape   crawl oxfordstrat.com and download every PDF
+//	vellum ingest   extract text from PDFs and build a BM25 index
+//	vellum query    search the index and return cited chunks
 package main
 
 import (
@@ -11,10 +12,14 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/DeanT-04/oxford-strat-RAG/internal/app"
+	"github.com/DeanT-04/oxford-strat-RAG/internal/chunk"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/config"
+	"github.com/DeanT-04/oxford-strat-RAG/internal/ingest"
+	"github.com/DeanT-04/oxford-strat-RAG/internal/query"
 )
 
 // version is overridable at build time via -ldflags "-X main.version=...".
@@ -34,6 +39,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "scrape":
 		return runScrape(args[1:], stdout, stderr)
+	case "ingest":
+		return runIngest(args[1:], stdout, stderr)
+	case "query":
+		return runQuery(args[1:], stdout, stderr)
 	case "version", "-v", "--version":
 		fmt.Fprintf(stdout, "vellum %s\n", version)
 		return 0
@@ -96,11 +105,74 @@ func runScrape(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func runIngest(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("ingest", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		manifestPath = fs.String("manifest", "data/manifest.json", "manifest path")
+		dataDir      = fs.String("dir", "", "directory containing downloaded PDFs (default: manifest dir)")
+		indexPath    = fs.String("index", "data/index.json", "index output path")
+		maxChunk     = fs.Int("max-chunk", chunk.DefaultMaxLen, "max chunk size in characters")
+		minChunk     = fs.Int("min-chunk", chunk.DefaultMinLen, "min chunk size in characters")
+		verbose      = fs.Bool("verbose", false, "verbose logging")
+	)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(stderr, "unexpected argument %q\n", fs.Arg(0))
+		return 2
+	}
+
+	sum, err := ingest.Run(ingest.Options{
+		ManifestPath: *manifestPath,
+		DataDir:      *dataDir,
+		IndexPath:    *indexPath,
+		MaxChunk:     *maxChunk,
+		MinChunk:     *minChunk,
+		Verbose:      *verbose,
+	}, stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
+	}
+
+	for _, r := range sum.Results {
+		fmt.Fprintf(stdout, "%-9s %5d  %s\n", r.Status, r.Chunks, r.Source)
+	}
+	fmt.Fprintf(stdout, "docs: %d, indexed: %d, no_text: %d, failed: %d, chunks: %d\n",
+		sum.Docs, sum.Indexed, sum.NoText, sum.Failed, sum.Chunks)
+	fmt.Fprintf(stdout, "index: %s\n", sum.IndexPath)
+	return 0
+}
+
+func runQuery(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("query", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	indexPath := fs.String("index", "data/index.json", "index path")
+	k := fs.Int("k", 5, "number of results to return")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	q := strings.Join(fs.Args(), " ")
+	if strings.TrimSpace(q) == "" {
+		fmt.Fprintln(stderr, "usage: vellum query [-k N] \"your question\"")
+		return 2
+	}
+	if err := query.Run(*indexPath, q, *k, stdout); err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
 func usage(w io.Writer) {
 	fmt.Fprint(w, `vellum — Oxford Strat research RAG
 
 Usage:
   vellum scrape [flags]   crawl the site and download every PDF
+  vellum ingest [flags]   extract text from PDFs and build a BM25 index
+  vellum query [flags] Q  search the index and return cited chunks
   vellum version          print the version
   vellum help             show this help
 
@@ -123,5 +195,16 @@ Environment (overrides defaults, flags win):
   VELLUM_CONCURRENCY, VELLUM_MAX_DEPTH, VELLUM_TIMEOUT, VELLUM_RETRIES,
   VELLUM_POLITENESS, VELLUM_MAX_FILE_SIZE, VELLUM_RESUME, VELLUM_DRY_RUN,
   VELLUM_VERBOSE, VELLUM_USER_AGENT
+
+Ingest flags:
+  -manifest  JSON manifest path   (default data/manifest.json)
+  -dir       PDF directory        (default: manifest dir)
+  -index     index output path    (default data/index.json)
+  -max-chunk max chunk chars      (default 1200)
+  -min-chunk min chunk chars      (default 80)
+
+Query flags:
+  -index  index path              (default data/index.json)
+  -k      number of results       (default 5)
 `)
 }

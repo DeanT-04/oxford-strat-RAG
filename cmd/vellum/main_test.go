@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/DeanT-04/oxford-strat-RAG/internal/chunk"
+	"github.com/DeanT-04/oxford-strat-RAG/internal/index"
 )
 
 func TestRunDispatch(t *testing.T) {
@@ -105,5 +108,38 @@ func TestRunScrapeParseError(t *testing.T) {
 	var errb strings.Builder
 	if code := run([]string{"scrape", "-concurrency", "abc"}, &strings.Builder{}, &errb); code != 2 {
 		t.Fatalf("code = %d, want 2", code)
+	}
+}
+
+func TestRunQueryEndToEnd(t *testing.T) {
+	ix := index.Build([]chunk.Chunk{
+		{ID: "a:0", DocID: "a", Source: "a.pdf", Title: "Momentum Paper", Text: "momentum works"},
+	})
+	p := filepath.Join(t.TempDir(), "index.json")
+	if err := ix.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	code := run([]string{"query", "-index", p, "-k", "1", "momentum"}, &out, &strings.Builder{})
+	if code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	if !strings.Contains(out.String(), "Momentum Paper") {
+		t.Fatalf("output: %s", out.String())
+	}
+}
+
+func TestRunQueryUsageError(t *testing.T) {
+	var errb strings.Builder
+	if code := run([]string{"query"}, &strings.Builder{}, &errb); code != 2 {
+		t.Fatalf("code = %d, want 2", code)
+	}
+}
+
+func TestRunIngestMissingManifest(t *testing.T) {
+	var errb strings.Builder
+	code := run([]string{"ingest", "-manifest", filepath.Join(t.TempDir(), "nope.json")}, &strings.Builder{}, &errb)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
 	}
 }

@@ -4,17 +4,22 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-B88746?style=flat&labelColor=002147" alt="License: MIT"></a>
   <a href="#"><img src="https://img.shields.io/badge/Go-1.26-B88746?style=flat&labelColor=002147" alt="Go 1.26"></a>
   <a href="#"><img src="https://img.shields.io/badge/CPU--only-no_GPU_required-B88746?style=flat&labelColor=002147" alt="CPU-only"></a>
-  <a href="#"><img src="https://img.shields.io/badge/deps-x%2Fnet%2Fhtml-B88746?style=flat&labelColor=002147" alt="one dependency"></a>
+  <a href="#"><img src="https://img.shields.io/badge/retrieval-BM25-B88746?style=flat&labelColor=002147" alt="BM25 retrieval"></a>
 </p>
 
-**Vellum** crawls Oxford Capital Strategies' public-domain trading research and
-downloads every PDF into a local, machine-readable archive — the foundation for
-an ultra-lightweight retrieval-augmented question answering system.
+**Vellum** is an ultra-lightweight retrieval-augmented question answering
+system over Oxford Capital Strategies' public-domain trading research. It
+crawls the site, downloads every PDF, indexes the text, and answers questions
+with cited evidence — all in one static Go binary, on a laptop CPU, with no GPU
+and no paid LLM/embedding API.
 
-Vellum is a single static Go binary with no runtime dependencies. It runs on a
-laptop CPU (no GPU required), keeps itself within a ~60% CPU budget by default,
-and produces a `manifest.json` that a later RAG phase consumes directly. This
-repository currently ships the **scraper**; ingestion and querying land next.
+The pipeline is three commands:
+
+```sh
+vellum scrape   # download every PDF into data/ and write data/manifest.json
+vellum ingest   # extract text from the PDFs and build a BM25 index (data/index.json)
+vellum query    # "your question" → ranked, cited chunks
+```
 
 ## Install
 
@@ -33,88 +38,76 @@ go install github.com/DeanT-04/oxford-strat-RAG/cmd/vellum@latest
 ## Usage
 
 ```sh
-# Discover and report PDFs without downloading
-vellum scrape -dry-run
+# 1. Discover and download every PDF
+vellum scrape          # or -dry-run to preview
 
-# Download every discovered PDF into ./data and write data/manifest.json
-vellum scrape
+# 2. Extract text and build the index
+vellum ingest
 
-# Full control
-vellum scrape -url https://oxfordstrat.com/resources/ \
-  -out data -depth 2 -concurrency 4 -resume -verbose
+# 3. Ask questions
+vellum query "value and momentum across asset classes"
+vellum query -k 10 "how does the turtle trading system enter trades"
 ```
 
-Common flags:
+Scrape flags:
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `-url` | `https://oxfordstrat.com/resources/` | seed page to crawl |
 | `-out` | `data` | directory for downloaded files |
-| `-manifest` | `data/manifest.json` | JSON manifest path |
 | `-concurrency` | `0` | download workers; `0` = auto (60% of CPUs) |
 | `-depth` | `2` | same-host crawl depth |
 | `-resume` | `false` | skip already-downloaded files |
-| `-dry-run` | `false` | discover only, download nothing |
 | `-politeness` | `250ms` | minimum interval between requests |
 
-Run `vellum scrape -h` for the complete list. Every flag can also be set via a
-`VELLUM_*` environment variable (flags win over env, env wins over defaults):
+Run `vellum <cmd> -h` for the complete flag list. Scrape flags can also be set
+via `VELLUM_*` environment variables (flags win over env, env wins over
+defaults).
 
-```sh
-VELLUM_SEED_URL=... VELLUM_OUTPUT_DIR=... VELLUM_CONCURRENCY=... vellum scrape
+## Query output
+
+Each result is a BM25-ranked chunk with its source PDF:
+
+```text
+[1] 20.4838  Value and Momentum Everywhere
+    source: ValMomEverywhere.pdf
+    average Sharpe ratio across markets, indicating strong correlation structure …
+[2] 20.2127  Value and Momentum Everywhere
+    source: ValMomEverywhere.pdf
+    This correlation structure—value being positively correlated across assets …
 ```
 
-## Output
-
-Downloads land in `-out` (default `data/`) and a `manifest.json` records the
-outcome of every discovered PDF — source URL, final URL, local path, SHA-256,
-size, content type, and status:
-
-```json
-{
-  "generated_at": "2026-08-16T14:41:00Z",
-  "seed": "https://oxfordstrat.com/resources/",
-  "count": 31,
-  "entries": [
-    {
-      "url": "https://oxfordstrat.com/coasdfASD32/uploads/2016/01/turtle-rules.pdf",
-      "final_url": "https://oxfordstrat.com/coasdfASD32/uploads/2016/01/turtle-rules.pdf",
-      "local_path": "turtle-rules.pdf",
-      "size": 140352,
-      "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-      "content_type": "application/pdf",
-      "status": "downloaded",
-      "found_on": "https://oxfordstrat.com/resources/articles/",
-      "title": "The Original Turtle Trading Rules",
-      "fetched_at": "2026-08-16T14:41:00Z"
-    }
-  ]
-}
-```
+`data/manifest.json` records every download (URL, final URL, local path,
+SHA-256, size, status); `data/index.json` is the queryable index.
 
 ## How it works
 
 ```mermaid
 flowchart LR
     A[seed page] --> B{discover<br/>same-host BFS}
-    B -->|.pdf link| C[dedupe + sort]
-    B -->|HTML page| B
-    C --> D[worker pool<br/>60% CPU budget]
-    D --> E[stream to disk<br/>temp + atomic rename]
-    E --> F[verify PDF magic<br/>size cap + SHA-256]
-    F --> G[manifest.json]
+    B -->|.pdf link| C[download pool<br/>60% CPU budget]
+    C --> D[manifest.json]
+    D --> E[extract text<br/>pdftotext / pure-Go]
+    E --> F[chunk]
+    F --> G[BM25 index]
+    G --> H[query → ranked, cited chunks]
 ```
 
-- **Polite crawling** — browser User-Agent, per-request timeouts, exponential
-  backoff, and a minimum interval between requests (no hammering the host).
-- **Best-effort discovery** — a single unreachable page is skipped, not fatal;
-  only the seed page is required.
-- **Safe I/O** — filenames are derived from URL basenames and sanitized;
-  writes are atomic; nothing outside the output directory is ever touched.
-- **Bounded resources** — the worker count defaults to 60% of logical CPUs and
-  every body is size-capped.
+- **Polite crawling** — browser User-Agent, timeouts, exponential backoff, a
+  minimum interval between requests.
+- **Safe I/O** — sanitized filenames, path-containment guards, atomic writes.
+- **Ultra-lightweight retrieval** — pure-Go BM25, in-memory, no GPU and no
+  embedding service; query latency is microseconds for this corpus.
+- **Grounded answers** — every result carries its source PDF filename, so the
+  host agent answers only from retrieved evidence.
 
 Details: [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Skill
+
+A Reasonix skill (`/vellum-rag`, in `.reasonix/skills/vellum-rag/SKILL.md`)
+wraps `vellum query` so the agent answers from retrieved chunks — no extra
+LLM or embedding API key is required.
 
 ## Development
 
@@ -124,18 +117,17 @@ go test ./...    # unit tests (no network; httptest + stubs)
 go test -cover ./...
 ```
 
-Tests are table-driven and colocated with their packages. Coverage is measured
-with `go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out`.
+Coverage is measured with
+`go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out`.
 
 ## Known limitations
 
 - External academic PDFs are fetched from their original hosts; some may be
-  slow or unreachable from certain networks and are recorded as `failed` in
-  the manifest rather than retried forever.
-- The strategy/indicator *articles* themselves are not yet archived — only the
-  linked PDFs. Ingesting article text is part of the RAG phase.
-- Cross-host downloads use the same politeness budget, so a full run can take a
-  minute or two by design.
+  slow or unreachable and are recorded as `failed` in the manifest.
+- Three PDFs are image-only scans with no text layer and are skipped at ingest;
+  they would need OCR (not included).
+- Retrieval is lexical (BM25) — precise for exact terms but not semantic.
+  Dense embeddings can be added behind the same `Extractor`/index seam later.
 
 ## License
 

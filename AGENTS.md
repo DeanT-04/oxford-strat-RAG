@@ -15,7 +15,8 @@ paid LLM API.
 
 - Repo: https://github.com/DeanT-04/oxford-strat-RAG
 - License: MIT
-- Language: **Go** (single static binary; no runtime deps)
+- Language: **Go** (single static binary; 2 small deps — `x/net/html`,
+  `ledongthuc/pdf`)
 - Target hardware budget: **≤ 60% of CPU/memory** (AMD Ryzen 7 3700U, 14 GB
   RAM, integrated Vega 10 GPU). "Feels beefy" comes from smart retrieval,
   not raw compute.
@@ -30,6 +31,8 @@ go test -cover ./...    # coverage summary
 go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out
 go run ./cmd/vellum scrape -dry-run -verbose   # discover-only dry run
 go run ./cmd/vellum scrape                     # full download run
+go run ./cmd/vellum ingest                     # extract text + build BM25 index
+go run ./cmd/vellum query "question"           # ranked, cited chunks
 go run ./cmd/vellum version
 ```
 
@@ -44,14 +47,19 @@ internal/config/   defaults + env + validation (no I/O besides injected getenv)
 internal/fetch/    polite, retrying HTTP client (UA, backoff, size caps)
 internal/crawl/    BFS discovery of PDF links (same-host, depth-limited)
 internal/download/ worker pool: streaming, atomic writes, sha256, resume
-internal/manifest/ JSON manifest (atomic write) — consumed by the RAG phase
-internal/app/      composition root wiring the flow end-to-end
+internal/manifest/ JSON manifest (atomic write)
+internal/text/     PDF -> text (pdftotext + pure-Go fallback) + tokenizer
+internal/chunk/    paragraph/sentence chunking with source metadata
+internal/index/    BM25 index: build, search, JSON persistence
+internal/ingest/   manifest -> text -> chunk -> index -> save
+internal/query/    load index + render ranked, cited results
+internal/app/      composition root wiring the scrape flow end-to-end
 docs/              multi-language docs (EN + zh-CN)
 ```
 
-Dependency direction is strict: `app -> {config, fetch, crawl, download,
-manifest}`. Lower packages never import higher ones. Interfaces are defined
-by the consumer (`crawl.Fetcher`, `download.Fetcher`) for testability.
+Dependency direction is strict and acyclic; lower packages never import
+higher ones. Interfaces are defined by the consumer (`crawl.Fetcher`,
+`download.Fetcher`, `text.Extractor`) for testability.
 
 ## Coding standards
 
@@ -65,7 +73,8 @@ by the consumer (`crawl.Fetcher`, `download.Fetcher`) for testability.
   results are stable across runs.
 - **Simplicity**: start with the simplest correct solution; add a building
   block only when the current design provably needs it. Standard library
-  first; the only external dep is `golang.org/x/net/html`.
+  first; external deps are `golang.org/x/net/html` and
+  `github.com/ledongthuc/pdf` (pure-Go PDF fallback).
 
 ## Security rules (non-negotiable)
 
@@ -94,13 +103,13 @@ by the consumer (`crawl.Fetcher`, `download.Fetcher`) for testability.
 
 ## Roadmap (build order)
 
-1. ✅ Scraper (this phase): `vellum scrape` → `data/manifest.json`.
-2. Ingest: extract text from PDFs, chunk, index (hybrid BM25 + lightweight
-   dense embeddings; no GPU).
-3. Query: `vellum query "..."` returns ranked chunks + citations.
-4. Skill: wrap the query CLI in a Reasonix skill so the agent answers
-   grounded in retrieved context — **no extra LLM API key, no Ollama needed**
-   (the host agent supplies the language model).
+1. ✅ Scrape: `vellum scrape` → `data/manifest.json`.
+2. ✅ Ingest: `vellum ingest` → `data/index.json` (text → chunk → BM25).
+3. ✅ Query: `vellum query "..."` → ranked chunks + citations.
+4. ✅ Skill: `/vellum-rag` wraps the query CLI; the host agent answers from
+   retrieved evidence — **no extra LLM API key, no Ollama**.
+5. Future: dense (semantic) embeddings behind the `Extractor`/index seam,
+   OCR for scanned PDFs, `vellum serve` HTTP interface.
 
 ## How to evolve this file
 
