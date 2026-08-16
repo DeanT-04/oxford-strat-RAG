@@ -1,7 +1,7 @@
 // Command vellum is the CLI for the Oxford Strat research tool.
 //
-//	vellum scrape   crawl oxfordstrat.com and download every PDF
-//	vellum ingest   extract text from PDFs and build a BM25 index
+//	vellum scrape   crawl oxfordstrat.com and gather PDFs, HTML, links, transcripts
+//	vellum ingest   extract text from downloaded content and build a BM25 index
 //	vellum query    search the index and return cited chunks
 package main
 
@@ -223,8 +223,8 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `vellum — Oxford Strat research RAG
 
 Usage:
-  vellum scrape [flags]   crawl the site and download every PDF
-  vellum ingest [flags]   extract text from PDFs and build a BM25 index
+  vellum scrape [flags]   crawl the site and gather PDFs, HTML, links, transcripts
+  vellum ingest [flags]   extract text from downloaded content and build a BM25 index
   vellum query [flags] Q  search the index and return cited chunks
   vellum links [group]    list the curated external-links directory
   vellum videos           list video talks and their transcript coverage
