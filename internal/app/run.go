@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/DeanT-04/oxford-strat-RAG/internal/config"
@@ -26,15 +29,19 @@ type Summary struct {
 	Downloaded   int
 	Skipped      int
 	Failed       int
+	Referenced   int
 	ManifestPath string
 }
 
-// target is a discovered download candidate with its metadata.
+// target is a discovered download candidate with its metadata. Reference
+// targets are documented in the manifest but never downloaded.
 type target struct {
-	URL     string
-	Kind    string
-	Title   string
-	FoundOn string
+	URL       string
+	Kind      string // manifest.KindPDF | manifest.KindHTML | crawl.ArticleSSRN
+	Title     string
+	FoundOn   string
+	Host      string
+	Reference bool
 }
 
 // Run executes a full scrape: validate config, discover links of the
@@ -78,8 +85,24 @@ func Run(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) (Summ
 		return sum, fmt.Errorf("create output dir: %w", err)
 	}
 
-	dtargets := make([]download.Target, len(targets))
-	for i, t := range targets {
+	downloadable, references := resolveTargets(ctx, client, targets)
+
+	entries := make([]manifest.Entry, 0, len(targets))
+	for _, t := range references {
+		entries = append(entries, manifest.Entry{
+			URL:       t.URL,
+			Kind:      manifest.KindPDF,
+			Status:    manifest.StatusReference,
+			Host:      t.Host,
+			Title:     t.Title,
+			FoundOn:   t.FoundOn,
+			FetchedAt: time.Now(),
+		})
+		sum.Referenced++
+	}
+
+	dtargets := make([]download.Target, len(downloadable))
+	for i, t := range downloadable {
 		dtargets[i] = download.Target{URL: t.URL, Kind: t.Kind}
 	}
 	pool := download.New(client, cfg.OutputDir, cfg.MaxFileSize, cfg.Resume)
@@ -89,7 +112,6 @@ func Run(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) (Summ
 		return sum, err
 	}
 
-	entries := make([]manifest.Entry, 0, len(targets))
 	for i, r := range results {
 		e := manifest.Entry{
 			URL:         r.URL,
@@ -98,15 +120,16 @@ func Run(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) (Summ
 			Size:        r.Size,
 			SHA256:      r.SHA256,
 			ContentType: r.ContentType,
-			Kind:        targets[i].Kind,
+			Kind:        downloadable[i].Kind,
 			Status:      r.Status,
 			Error:       r.Err,
 			FetchedAt:   r.FetchedAt,
-			FoundOn:     targets[i].FoundOn,
-			Title:       targets[i].Title,
+			FoundOn:     downloadable[i].FoundOn,
+			Title:       downloadable[i].Title,
+			Host:        downloadable[i].Host,
 		}
 		// Enrich HTML entries with the page's rating (and title fallback).
-		if r.Status == manifest.StatusDownloaded && targets[i].Kind == manifest.KindHTML {
+		if r.Status == manifest.StatusDownloaded && downloadable[i].Kind == manifest.KindHTML {
 			if rating, title, err := readHTMLMeta(filepath.Join(cfg.OutputDir, r.LocalPath)); err == nil {
 				e.Rating = rating
 				if e.Title == "" && title != "" {
@@ -125,6 +148,9 @@ func Run(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) (Summ
 		entries = append(entries, e)
 	}
 
+	// Deterministic output regardless of discovery/download ordering.
+	sort.Slice(entries, func(i, j int) bool { return entries[i].URL < entries[j].URL })
+
 	m := manifest.New(cfg.SeedURL, entries)
 	if err := m.WriteFile(cfg.ManifestPath); err != nil {
 		return sum, err
@@ -136,9 +162,10 @@ func Run(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) (Summ
 		"downloaded", sum.Downloaded,
 		"skipped", sum.Skipped,
 		"failed", sum.Failed,
+		"referenced", sum.Referenced,
 	)
-	fmt.Fprintf(stdout, "discovered: %d, downloaded: %d, skipped: %d, failed: %d\n",
-		sum.Discovered, sum.Downloaded, sum.Skipped, sum.Failed)
+	fmt.Fprintf(stdout, "discovered: %d, downloaded: %d, skipped: %d, failed: %d, referenced: %d\n",
+		sum.Discovered, sum.Downloaded, sum.Skipped, sum.Failed, sum.Referenced)
 	fmt.Fprintf(stdout, "manifest: %s\n", cfg.ManifestPath)
 	return sum, nil
 }
@@ -146,7 +173,16 @@ func Run(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) (Summ
 // discover runs the kind-gated discovery paths and returns the combined,
 // deterministic download targets.
 func discover(ctx context.Context, cfg config.Config, client *fetch.Client, logger *slog.Logger) ([]target, error) {
+	selfHost := selfHostOf(cfg.SeedURL)
 	var targets []target
+	seen := make(map[string]bool)
+	add := func(t target) {
+		if seen[t.URL] {
+			return
+		}
+		seen[t.URL] = true
+		targets = append(targets, t)
+	}
 
 	if cfg.HasKind(manifest.KindPDF) {
 		cr, err := crawl.New(client, cfg.SeedURL, cfg.MaxDepth)
@@ -159,7 +195,25 @@ func discover(ctx context.Context, cfg config.Config, client *fetch.Client, logg
 			return nil, err
 		}
 		for _, l := range links {
-			targets = append(targets, target{URL: l.URL, Kind: manifest.KindPDF, Title: l.Title, FoundOn: l.FoundOn})
+			add(target{URL: l.URL, Kind: manifest.KindPDF, Title: l.Title, FoundOn: l.FoundOn, Host: hostOf(l.URL, selfHost)})
+		}
+
+		// The article-library index lists the full corpus, including external
+		// papers (SSRN, CME, citeseerx, …) the BFS never sees.
+		logger.Info("discovering article links", "index", cfg.ArticlesURL)
+		alinks, err := cr.DiscoverArticleLinks(ctx, cfg.ArticlesURL)
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range alinks {
+			switch a.Kind {
+			case crawl.ArticlePDF:
+				add(target{URL: a.URL, Kind: manifest.KindPDF, Title: a.Title, FoundOn: cfg.ArticlesURL, Host: a.Host})
+			case crawl.ArticleSSRN:
+				add(target{URL: a.URL, Kind: crawl.ArticleSSRN, Title: a.Title, FoundOn: cfg.ArticlesURL, Host: a.Host})
+			case crawl.ArticleReference:
+				add(target{URL: a.URL, Kind: manifest.KindPDF, Title: a.Title, FoundOn: cfg.ArticlesURL, Host: a.Host, Reference: true})
+			}
 		}
 	}
 
@@ -174,11 +228,57 @@ func discover(ctx context.Context, cfg config.Config, client *fetch.Client, logg
 			return nil, err
 		}
 		for _, p := range pages {
-			targets = append(targets, target{URL: p.URL, Kind: manifest.KindHTML, Title: p.Title, FoundOn: p.FoundOn})
+			add(target{URL: p.URL, Kind: manifest.KindHTML, Title: p.Title, FoundOn: p.FoundOn, Host: selfHost})
 		}
 	}
 
 	return targets, nil
+}
+
+// resolveTargets splits targets into downloadable jobs and reference entries.
+// SSRN abstract links are resolved to their delivery PDF URL here; if that
+// fails they become references so the corpus stays documented, never silent.
+func resolveTargets(ctx context.Context, f crawl.Fetcher, targets []target) (downloadable, references []target) {
+	for _, t := range targets {
+		if t.Reference {
+			references = append(references, t)
+			continue
+		}
+		if t.Kind == crawl.ArticleSSRN {
+			pdfURL, err := crawl.ResolveSSRNPDF(ctx, f, t.URL)
+			if err != nil {
+				t.Reference = true
+				t.Kind = manifest.KindPDF
+				references = append(references, t)
+				continue
+			}
+			t.URL = pdfURL
+			t.Kind = manifest.KindPDF
+		}
+		downloadable = append(downloadable, t)
+	}
+	return downloadable, references
+}
+
+// hostOf classifies a URL as oxfordstrat (same host as selfHost) or external.
+func hostOf(rawURL, selfHost string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return crawl.HostExternal
+	}
+	if strings.EqualFold(strings.TrimSuffix(u.Host, "."), selfHost) {
+		return crawl.HostOxfordstrat
+	}
+	return crawl.HostExternal
+}
+
+// selfHostOf returns the normalized host of the seed URL.
+func selfHostOf(seedURL string) string {
+	u, err := url.Parse(seedURL)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSuffix(u.Host, "."))
 }
 
 // readHTMLMeta extracts the rating and title from a downloaded HTML file.

@@ -80,6 +80,7 @@ func runScrape(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&cfg.DryRun, "dry-run", cfg.DryRun, "discover and report only, download nothing")
 	fs.BoolVar(&cfg.Verbose, "verbose", cfg.Verbose, "verbose logging")
 	fs.StringVar(&cfg.Kinds, "kinds", cfg.Kinds, "comma-separated content kinds to gather (pdf,html,…)")
+	fs.StringVar(&cfg.ArticlesURL, "articles", cfg.ArticlesURL, "article-library index URL")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -191,12 +192,13 @@ Scrape flags:
   -dry-run      discover only, no downloads
   -verbose      verbose logging
   -kinds        kinds to gather             (default pdf,html)
+  -articles     article-library index URL
 
 Environment (overrides defaults, flags win):
   VELLUM_SEED_URL, VELLUM_OUTPUT_DIR, VELLUM_MANIFEST_PATH,
   VELLUM_CONCURRENCY, VELLUM_MAX_DEPTH, VELLUM_TIMEOUT, VELLUM_RETRIES,
   VELLUM_POLITENESS, VELLUM_MAX_FILE_SIZE, VELLUM_RESUME, VELLUM_DRY_RUN,
-  VELLUM_VERBOSE, VELLUM_USER_AGENT, VELLUM_KINDS
+  VELLUM_VERBOSE, VELLUM_USER_AGENT, VELLUM_KINDS, VELLUM_ARTICLES_URL
 
 Ingest flags:
   -manifest  JSON manifest path   (default data/manifest.json)

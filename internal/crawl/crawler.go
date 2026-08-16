@@ -33,6 +33,27 @@ type PageLink struct {
 	Title   string // anchor text, if any
 }
 
+// ArticleLink is a paper link discovered on the article-library index.
+type ArticleLink struct {
+	URL   string
+	Title string
+	Host  string // HostOxfordstrat | HostExternal
+	Kind  string // ArticlePDF | ArticleSSRN | ArticleReference
+}
+
+// Article link kinds.
+const (
+	ArticlePDF       = "pdf"
+	ArticleSSRN      = "ssrn"
+	ArticleReference = "reference"
+)
+
+// Host classifications for manifest entries.
+const (
+	HostOxfordstrat = "oxfordstrat"
+	HostExternal    = "external"
+)
+
 // Crawler walks same-host HTML pages up to a depth limit, collecting PDFs.
 type Crawler struct {
 	fetch    Fetcher
@@ -241,6 +262,96 @@ func extractSectionLinks(base *url.URL, body []byte, headings []string) ([]ancho
 	}
 	walk(doc)
 	return links, nil
+}
+
+// DiscoverArticleLinks parses the article-library index once and returns
+// every paper link it lists, deduplicated and sorted. Direct PDFs (same-host
+// uploads and external hosts) are classified ArticlePDF; SSRN abstract pages
+// are ArticleSSRN (to be resolved to a PDF or recorded as a reference);
+// paywalled/store pages are ArticleReference.
+func (c *Crawler) DiscoverArticleLinks(ctx context.Context, indexURL string) ([]ArticleLink, error) {
+	body, err := c.fetch.Get(ctx, indexURL)
+	if err != nil {
+		return nil, fmt.Errorf("crawl: fetch articles index %s: %w", indexURL, err)
+	}
+	base := pageBase(indexURL)
+	anchors, err := extractAnchors(base, body)
+	if err != nil {
+		return nil, fmt.Errorf("crawl: parse articles index %s: %w", indexURL, err)
+	}
+
+	seen := make(map[string]ArticleLink)
+	for _, a := range anchors {
+		u, err := url.Parse(a.href)
+		if err != nil {
+			continue
+		}
+		link, ok := classifyArticleLink(u, c.host, a.text)
+		if !ok {
+			continue
+		}
+		if _, dup := seen[link.URL]; !dup {
+			seen[link.URL] = link
+		}
+	}
+
+	out := make([]ArticleLink, 0, len(seen))
+	for _, l := range seen {
+		out = append(out, l)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].URL < out[j].URL })
+	return out, nil
+}
+
+// ResolveSSRNPDF fetches an SSRN abstract page and returns the direct PDF
+// (delivery.php) URL it links to, if any.
+func ResolveSSRNPDF(ctx context.Context, f Fetcher, abstractURL string) (string, error) {
+	body, err := f.Get(ctx, abstractURL)
+	if err != nil {
+		return "", err
+	}
+	anchors, err := extractAnchors(pageBase(abstractURL), body)
+	if err != nil {
+		return "", err
+	}
+	for _, a := range anchors {
+		if strings.Contains(strings.ToLower(a.href), "delivery.php") {
+			return a.href, nil
+		}
+	}
+	return "", fmt.Errorf("ssrn: no delivery link on %s", abstractURL)
+}
+
+// classifyArticleLink classifies a resolved link on the article index.
+func classifyArticleLink(u *url.URL, selfHost, title string) (ArticleLink, bool) {
+	host := normalizeHost(u.Host)
+	switch host {
+	case "twitter.com", "linkedin.com", "facebook.com", "youtube.com", "instagram.com":
+		return ArticleLink{}, false // social/nav, not corpus content
+	}
+	hc := HostExternal
+	if host == selfHost {
+		hc = HostOxfordstrat
+	}
+	link := ArticleLink{URL: u.String(), Title: title, Host: hc}
+	switch {
+	case isPDFURL(u) || isPDFDownloadURL(u):
+		link.Kind = ArticlePDF
+	case host == "papers.ssrn.com" && strings.Contains(u.RawQuery, "abstract_id"):
+		link.Kind = ArticleSSRN
+	case host == "store.traders.com":
+		link.Kind = ArticleReference
+	default:
+		return ArticleLink{}, false
+	}
+	return link, true
+}
+
+// isPDFDownloadURL reports whether a URL points at a PDF via a query flag
+// (e.g. citeseerx "viewdoc/download?...type=pdf") rather than a .pdf suffix.
+func isPDFDownloadURL(u *url.URL) bool {
+	q := u.Query()
+	return strings.EqualFold(q.Get("type"), "pdf") || strings.EqualFold(q.Get("format"), "pdf")
 }
 
 // isHeading reports whether tag is an HTML heading element.

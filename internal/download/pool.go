@@ -155,7 +155,7 @@ func (p *Pool) downloadOneKind(ctx context.Context, rawURL, name, kind string) R
 		}
 	}
 
-	resp, err := p.fetch.Stream(ctx, rawURL)
+	resp, err := p.fetchStream(ctx, rawURL)
 	if err != nil {
 		res.Status = StatusFailed
 		res.Err = err.Error()
@@ -346,4 +346,66 @@ func validateContent(kind, tmpName string) error {
 		}
 	}
 	return nil
+}
+
+// fetchStream fetches rawURL, falling back to alternate URL schemes (http vs
+// https, www vs bare host) when the primary fetch fails. External hosts often
+// 404 or refuse on one spelling but serve on another.
+func (p *Pool) fetchStream(ctx context.Context, rawURL string) (*http.Response, error) {
+	var lastErr error
+	for _, u := range alternateURLs(rawURL) {
+		resp, err := p.fetch.Stream(ctx, u)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+	}
+	return nil, lastErr
+}
+
+// alternateURLs returns rawURL followed by its scheme-swapped and www-toggled
+// variants, deduplicated. The original is always first.
+func alternateURLs(rawURL string) []string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return []string{rawURL}
+	}
+	seen := map[string]bool{rawURL: true}
+	out := []string{rawURL}
+	add := func(v *url.URL) {
+		if s := v.String(); !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+
+	swapScheme := func(v *url.URL) {
+		if v.Scheme == "http" {
+			v.Scheme = "https"
+		} else if v.Scheme == "https" {
+			v.Scheme = "http"
+		}
+	}
+	toggleWWW := func(v *url.URL) {
+		if strings.HasPrefix(strings.ToLower(v.Host), "www.") {
+			v.Host = v.Host[4:]
+		} else {
+			v.Host = "www." + v.Host
+		}
+	}
+
+	a := *u
+	swapScheme(&a)
+	add(&a)
+
+	b := *u
+	toggleWWW(&b)
+	add(&b)
+
+	c := *u
+	swapScheme(&c)
+	toggleWWW(&c)
+	add(&c)
+
+	return out
 }

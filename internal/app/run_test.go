@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/DeanT-04/oxford-strat-RAG/internal/config"
+	"github.com/DeanT-04/oxford-strat-RAG/internal/crawl"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/manifest"
 )
 
@@ -47,6 +48,7 @@ func siteServer(t *testing.T) *httptest.Server {
 func baseConfig(srv *httptest.Server, dir string) config.Config {
 	cfg := config.Default()
 	cfg.SeedURL = srv.URL + "/resources/"
+	cfg.ArticlesURL = srv.URL + "/resources/articles/"
 	cfg.OutputDir = dir
 	cfg.ManifestPath = filepath.Join(dir, "manifest.json")
 	cfg.Politeness = 0
@@ -128,6 +130,7 @@ func TestRunNoLinks(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.SeedURL = srv.URL + "/"
+	cfg.ArticlesURL = srv.URL + "/articles/"
 	cfg.OutputDir = t.TempDir()
 	cfg.ManifestPath = filepath.Join(t.TempDir(), "m.json")
 	cfg.Politeness = 0
@@ -184,6 +187,9 @@ func articleSite(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/resources/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<h2>Reviews of Trading Strategies</h2><a href="/trading-strategies/nr7/">NR7 Pattern</a>`)
+	})
+	mux.HandleFunc("/resources/articles/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>no papers</body></html>`)
 	})
 	mux.HandleFunc("/trading-strategies/nr7/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
@@ -247,5 +253,50 @@ func TestRunKindsPDFOnly(t *testing.T) {
 	}
 	if sum.Discovered != 0 {
 		t.Fatalf("pdf-only run should find no PDFs, got %d", sum.Discovered)
+	}
+}
+
+// ssrnFetcher is a crawl.Fetcher stub for resolveTargets tests.
+type ssrnFetcher struct{ pages map[string]string }
+
+func (s ssrnFetcher) Get(ctx context.Context, u string) ([]byte, error) {
+	if b, ok := s.pages[u]; ok {
+		return []byte(b), nil
+	}
+	return nil, fmt.Errorf("not found: %s", u)
+}
+
+func TestResolveTargets(t *testing.T) {
+	f := ssrnFetcher{pages: map[string]string{
+		"https://papers.ssrn.com/sol3/papers.cfm?abstract_id=1": `<a href="https://ssrn.com/delivery.php?abstractid=1">pdf</a>`,
+	}}
+	targets := []target{
+		{URL: "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=1", Kind: crawl.ArticleSSRN, Host: "external"},
+		{URL: "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2", Kind: crawl.ArticleSSRN, Host: "external"},
+		{URL: "https://store.traders.com/x.html", Kind: manifest.KindPDF, Host: "external", Reference: true},
+	}
+	dl, refs := resolveTargets(context.Background(), f, targets)
+	if len(dl) != 1 || dl[0].URL != "https://ssrn.com/delivery.php?abstractid=1" {
+		t.Fatalf("downloadable = %+v", dl)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("references = %+v", refs)
+	}
+	for _, r := range refs {
+		if !r.Reference {
+			t.Fatalf("reference target not flagged: %+v", r)
+		}
+	}
+}
+
+func TestHostOf(t *testing.T) {
+	if hostOf("https://oxfordstrat.com/a.pdf", "oxfordstrat.com") != crawl.HostOxfordstrat {
+		t.Fatal("same host should classify oxfordstrat")
+	}
+	if hostOf("https://www.cmegroup.com/a.pdf", "oxfordstrat.com") != crawl.HostExternal {
+		t.Fatal("external host should classify external")
+	}
+	if hostOf("://bad", "oxfordstrat.com") != crawl.HostExternal {
+		t.Fatal("unparseable should classify external")
 	}
 }

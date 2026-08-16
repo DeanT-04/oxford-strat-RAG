@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"strings"
 	"testing"
 )
 
@@ -350,6 +351,79 @@ func TestExtractSectionLinksExternalExcluded(t *testing.T) {
 	}
 	if len(anchors) != 2 {
 		t.Fatalf("len = %d", len(anchors))
+	}
+}
+
+func TestDiscoverArticleLinks(t *testing.T) {
+	f := &mapFetcher{pages: map[string]string{
+		"https://example.com/resources/articles/": `
+			<a href="https://example.com/uploads/a.pdf">Same-host paper</a>
+			<a href="https://www.cmegroup.com/files/x.pdf">CME paper</a>
+			<a href="https://papers.ssrn.com/sol3/papers.cfm?abstract_id=123">SSRN paper</a>
+			<a href="http://citeseerx.ist.psu.edu/viewdoc/download?doi=1&type=pdf">CiteSeerX</a>
+			<a href="https://store.traders.com/-c-test-pdf.html">c-Test</a>
+			<a href="https://twitter.com/oxfordstrat">twitter</a>
+			<a href="/resources/books/">books</a>
+		`,
+	}}
+	c, _ := New(f, "https://example.com/", 0)
+	links, err := c.DiscoverArticleLinks(context.Background(), "https://example.com/resources/articles/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byURL := map[string]ArticleLink{}
+	for _, l := range links {
+		byURL[l.URL] = l
+	}
+	if _, ok := byURL["https://example.com/uploads/a.pdf"]; !ok {
+		t.Fatalf("missing same-host pdf: %+v", links)
+	}
+	if byURL["https://example.com/uploads/a.pdf"].Host != HostOxfordstrat {
+		t.Fatalf("same-host should be oxfordstrat")
+	}
+	if byURL["https://www.cmegroup.com/files/x.pdf"].Host != HostExternal {
+		t.Fatalf("cmegroup should be external")
+	}
+	if byURL["https://papers.ssrn.com/sol3/papers.cfm?abstract_id=123"].Kind != ArticleSSRN {
+		t.Fatalf("ssrn kind mismatch")
+	}
+	if byURL["http://citeseerx.ist.psu.edu/viewdoc/download?doi=1&type=pdf"].Kind != ArticlePDF {
+		t.Fatalf("citeseerx should be pdf")
+	}
+	if byURL["https://store.traders.com/-c-test-pdf.html"].Kind != ArticleReference {
+		t.Fatalf("store.traders should be reference")
+	}
+	for _, bad := range []string{"twitter.com", "/resources/books/"} {
+		for _, l := range links {
+			if strings.Contains(l.URL, bad) {
+				t.Fatalf("unexpected link %q", l.URL)
+			}
+		}
+	}
+}
+
+func TestResolveSSRNPDF(t *testing.T) {
+	f := &mapFetcher{pages: map[string]string{
+		"https://papers.ssrn.com/sol3/papers.cfm?abstract_id=123": `
+			<a href="https://papers.ssrn.com/sol3/Delivery.cfm?abstractid=123">Download</a>
+			<a href="https://ssrn.com/delivery.php?abstractid=123">PDF</a>
+		`,
+	}}
+	got, err := ResolveSSRNPDF(context.Background(), f, "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "delivery.php") {
+		t.Fatalf("resolved = %q", got)
+	}
+}
+
+func TestResolveSSRNPDFNoLink(t *testing.T) {
+	f := &mapFetcher{pages: map[string]string{
+		"https://papers.ssrn.com/sol3/papers.cfm?abstract_id=123": `<html>no download</html>`,
+	}}
+	if _, err := ResolveSSRNPDF(context.Background(), f, "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=123"); err == nil {
+		t.Fatal("expected error")
 	}
 }
 

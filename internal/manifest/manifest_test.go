@@ -80,3 +80,31 @@ func TestWriteFileMkdirError(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestKindOfDefault(t *testing.T) {
+	if (Entry{}).KindOf() != KindPDF {
+		t.Fatal("empty kind must default to pdf")
+	}
+	if (Entry{Kind: KindHTML}).KindOf() != KindHTML {
+		t.Fatal("explicit kind must be preserved")
+	}
+}
+
+func TestReferenceRoundTrip(t *testing.T) {
+	m := New("https://x/", []Entry{
+		{URL: "https://papers.ssrn.com/abc", Kind: KindPDF, Status: StatusReference, Host: "external"},
+	})
+	dir := t.TempDir()
+	p := filepath.Join(dir, "m.json")
+	if err := m.WriteFile(p); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := got.Entries[0]
+	if e.Status != StatusReference || e.Host != "external" || e.Kind != KindPDF {
+		t.Fatalf("entry = %+v", e)
+	}
+}

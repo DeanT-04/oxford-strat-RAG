@@ -67,6 +67,7 @@ func TestRunScrapeEndToEnd(t *testing.T) {
 	code := run([]string{
 		"scrape",
 		"-url", srv.URL + "/",
+		"-articles", srv.URL + "/articles/",
 		"-out", dir,
 		"-manifest", filepath.Join(dir, "m.json"),
 		"-politeness", "0",

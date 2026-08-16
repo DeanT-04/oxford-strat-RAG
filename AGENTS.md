@@ -110,9 +110,14 @@ higher ones. Interfaces are defined by the consumer (`crawl.Fetcher`,
 4. ✅ Skill: `/vellum-rag` wraps the query CLI; the host agent answers from
    retrieved evidence — **no extra LLM API key, no Ollama**.
 5. ✅ HTML strategy reviews: `vellum scrape --kinds pdf,html` also indexes the
-   ~128 review articles (kind=html) with rating + source URL; `ingest`
-   dispatches on kind.
-6. Future: dense (semantic) embeddings behind the `Extractor`/index seam,
+   review articles (kind=html) with rating + source URL; `ingest` dispatches
+   on kind.
+6. ✅ Article library: `scrape` reads `/resources/articles/` as the
+   authoritative corpus index — direct PDFs (same-host + external) are
+   downloaded with host classification (`host` field) and scheme/www fallback,
+   while paywalled/dead links (SSRN, store.traders.com) are recorded as
+   `status: reference` so nothing is silently omitted.
+7. Future: dense (semantic) embeddings behind the `Extractor`/index seam,
    OCR for scanned PDFs, `vellum serve` HTTP interface.
 
 ## How to evolve this file

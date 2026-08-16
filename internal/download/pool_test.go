@@ -349,6 +349,33 @@ func TestDownloadTargetsHTML(t *testing.T) {
 	}
 }
 
+func TestAlternateURLs(t *testing.T) {
+	got := alternateURLs("http://example.com/a.pdf")
+	want := map[string]bool{
+		"http://example.com/a.pdf":      true,
+		"https://example.com/a.pdf":     true,
+		"http://www.example.com/a.pdf":  true,
+		"https://www.example.com/a.pdf": true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v", got)
+	}
+	for _, u := range got {
+		if !want[u] {
+			t.Fatalf("unexpected alternate %q", u)
+		}
+	}
+	if got[0] != "http://example.com/a.pdf" {
+		t.Fatalf("original must be first: %v", got)
+	}
+}
+
+func TestAlternateURLsInvalid(t *testing.T) {
+	if got := alternateURLs("://bad"); len(got) != 1 || got[0] != "://bad" {
+		t.Fatalf("got %v", got)
+	}
+}
+
 func TestSanitizeNameExt(t *testing.T) {
 	cases := []struct{ in, ext, want string }{
 		{"https://x.com/trading-strategies/nr7/", ".html", "nr7.html"},

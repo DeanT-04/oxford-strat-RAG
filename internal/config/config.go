@@ -25,6 +25,8 @@ const (
 	DefaultPoliteness  = 250 * time.Millisecond
 	DefaultMaxFileSize = 512 << 20  // 512 MiB per file
 	DefaultKinds       = "pdf,html" // content kinds gathered by scrape
+	// DefaultArticlesURL is the authoritative article-library index.
+	DefaultArticlesURL = "https://oxfordstrat.com/resources/articles/"
 )
 
 // Config holds every tunable for a scrape run. Zero values are never valid;
@@ -44,6 +46,7 @@ type Config struct {
 	DryRun       bool          // discover and report only; download nothing
 	Verbose      bool          // verbose logging
 	Kinds        string        // comma-separated content kinds to gather (pdf, html, …)
+	ArticlesURL  string        // article-library index page
 }
 
 // Default returns a Config populated with safe, production-sane defaults.
@@ -60,6 +63,7 @@ func Default() Config {
 		Politeness:   DefaultPoliteness,
 		MaxFileSize:  DefaultMaxFileSize,
 		Kinds:        DefaultKinds,
+		ArticlesURL:  DefaultArticlesURL,
 	}
 }
 
@@ -114,6 +118,18 @@ func (c Config) Validate() error {
 	}
 	if u.Host == "" {
 		return fmt.Errorf("seed url: missing host")
+	}
+	if c.ArticlesURL != "" {
+		au, err := url.Parse(c.ArticlesURL)
+		if err != nil {
+			return fmt.Errorf("articles url: %w", err)
+		}
+		if au.Scheme != "http" && au.Scheme != "https" {
+			return fmt.Errorf("articles url: scheme must be http or https, got %q", au.Scheme)
+		}
+		if au.Host == "" {
+			return fmt.Errorf("articles url: missing host")
+		}
 	}
 	if c.OutputDir == "" {
 		return fmt.Errorf("output dir: must not be empty")
@@ -209,6 +225,7 @@ func ApplyEnv(cfg *Config, getenv func(string) string) error {
 	setString("VELLUM_MANIFEST_PATH", &cfg.ManifestPath)
 	setString("VELLUM_USER_AGENT", &cfg.UserAgent)
 	setString("VELLUM_KINDS", &cfg.Kinds)
+	setString("VELLUM_ARTICLES_URL", &cfg.ArticlesURL)
 
 	for _, step := range []func() error{
 		func() error { return setInt("VELLUM_CONCURRENCY", &cfg.Concurrency) },
