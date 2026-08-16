@@ -28,6 +28,9 @@ func siteServer(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/resources/books/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<a href="/uploads/book.pdf">Book</a>`)
 	})
+	mux.HandleFunc("/resources/ideas/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>no ideas</body></html>`)
+	})
 	mux.HandleFunc("/uploads/turtle.pdf", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/pdf")
 		w.Write([]byte("%PDF-1.4\nturtle\n%%EOF"))
@@ -191,6 +194,9 @@ func articleSite(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/resources/articles/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<html><body>no papers</body></html>`)
 	})
+	mux.HandleFunc("/resources/ideas/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>no ideas</body></html>`)
+	})
 	mux.HandleFunc("/trading-strategies/nr7/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
 		fmt.Fprint(w, `<html><head><title>NR7 Pattern</title></head><body>
@@ -286,6 +292,45 @@ func TestResolveTargets(t *testing.T) {
 		if !r.Reference {
 			t.Fatalf("reference target not flagged: %+v", r)
 		}
+	}
+}
+
+func TestRunIdeasPerson(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/resources/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>index</body></html>`)
+	})
+	mux.HandleFunc("/resources/articles/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>no papers</body></html>`)
+	})
+	mux.HandleFunc("/resources/ideas/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<a href="/resources/ideas/kahneman-daniel/">Kahneman, D.</a>`)
+	})
+	mux.HandleFunc("/resources/ideas/kahneman-daniel/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<html><head><title>Kahneman</title></head><body><p>prospect theory</p></body></html>`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cfg := baseConfig(srv, dir)
+	cfg.Kinds = "html"
+
+	var out, errb strings.Builder
+	if _, err := Run(context.Background(), cfg, &out, &errb); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	m, err := manifest.ReadFile(cfg.ManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Count != 1 {
+		t.Fatalf("count = %d", m.Count)
+	}
+	e := m.Entries[0]
+	if e.Kind != "html" || e.Person != "kahneman" {
+		t.Fatalf("entry = %+v", e)
 	}
 }
 

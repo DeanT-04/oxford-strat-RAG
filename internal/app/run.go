@@ -41,6 +41,7 @@ type target struct {
 	Title     string
 	FoundOn   string
 	Host      string
+	Person    string
 	Reference bool
 }
 
@@ -127,6 +128,7 @@ func Run(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) (Summ
 			FoundOn:     downloadable[i].FoundOn,
 			Title:       downloadable[i].Title,
 			Host:        downloadable[i].Host,
+			Person:      downloadable[i].Person,
 		}
 		// Enrich HTML entries with the page's rating (and title fallback).
 		if r.Status == manifest.StatusDownloaded && downloadable[i].Kind == manifest.KindHTML {
@@ -229,6 +231,17 @@ func discover(ctx context.Context, cfg config.Config, client *fetch.Client, logg
 		}
 		for _, p := range pages {
 			add(target{URL: p.URL, Kind: manifest.KindHTML, Title: p.Title, FoundOn: p.FoundOn, Host: selfHost})
+		}
+
+		// The ideas (thinker profile) index lives beside the seed.
+		ideasURL := strings.TrimSuffix(cfg.SeedURL, "/") + "/ideas/"
+		logger.Info("discovering ideas", "index", ideasURL)
+		ideas, err := cr.DiscoverIdeas(ctx, ideasURL)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range ideas {
+			add(target{URL: p.URL, Kind: manifest.KindHTML, Title: p.Title, FoundOn: p.FoundOn, Host: selfHost, Person: p.Person})
 		}
 	}
 

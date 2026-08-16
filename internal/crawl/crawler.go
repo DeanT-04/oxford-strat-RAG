@@ -31,6 +31,7 @@ type PageLink struct {
 	URL     string // absolute, normalized URL of the page
 	FoundOn string // page URL where the link was discovered
 	Title   string // anchor text, if any
+	Person  string // profile-page person key (e.g. "kahneman"), if any
 }
 
 // ArticleLink is a paper link discovered on the article-library index.
@@ -262,6 +263,63 @@ func extractSectionLinks(base *url.URL, body []byte, headings []string) ([]ancho
 	}
 	walk(doc)
 	return links, nil
+}
+
+// DiscoverIdeas parses the ideas index once and returns the same-host
+// profile page links (kind=html), deduplicated and sorted, with the person
+// key derived from each slug. The index self-link and sidebar navigation are
+// excluded.
+func (c *Crawler) DiscoverIdeas(ctx context.Context, indexURL string) ([]PageLink, error) {
+	body, err := c.fetch.Get(ctx, indexURL)
+	if err != nil {
+		return nil, fmt.Errorf("crawl: fetch ideas index %s: %w", indexURL, err)
+	}
+	base := pageBase(indexURL)
+	anchors, err := extractAnchors(base, body)
+	if err != nil {
+		return nil, fmt.Errorf("crawl: parse ideas index %s: %w", indexURL, err)
+	}
+
+	seen := make(map[string]PageLink)
+	for _, a := range anchors {
+		u, err := url.Parse(a.href)
+		if err != nil {
+			continue
+		}
+		if normalizeHost(u.Host) != c.host {
+			continue
+		}
+		// Only pages directly under the ideas index, excluding the index itself.
+		if !strings.HasPrefix(u.Path, base.Path) || u.Path == base.Path {
+			continue
+		}
+		if !isPageURL(u) {
+			continue
+		}
+		if _, ok := seen[u.String()]; !ok {
+			seen[u.String()] = PageLink{
+				URL: u.String(), FoundOn: indexURL, Title: a.text,
+				Person: personFromSlug(u.Path),
+			}
+		}
+	}
+
+	out := make([]PageLink, 0, len(seen))
+	for _, p := range seen {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].URL < out[j].URL })
+	return out, nil
+}
+
+// personFromSlug derives a person key from a profile slug's first segment
+// (e.g. "kahneman-daniel" -> "kahneman").
+func personFromSlug(p string) string {
+	seg := pathBase(strings.TrimSuffix(p, "/"))
+	if i := strings.Index(seg, "-"); i > 0 {
+		seg = seg[:i]
+	}
+	return strings.ToLower(seg)
 }
 
 // DiscoverArticleLinks parses the article-library index once and returns

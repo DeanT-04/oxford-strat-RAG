@@ -402,6 +402,41 @@ func TestDiscoverArticleLinks(t *testing.T) {
 	}
 }
 
+func TestDiscoverIdeas(t *testing.T) {
+	f := &mapFetcher{pages: map[string]string{
+		"https://example.com/resources/ideas/": `
+			<a href="/resources/ideas/kahneman-daniel/">Kahneman, D.</a>
+			<a href="/resources/ideas/valen-leigh/">Van Valen, L.</a>
+			<a href="/resources/ideas/">Ideas</a>
+			<a href="/resources/articles/">articles</a>
+		`,
+	}}
+	c, _ := New(f, "https://example.com/resources/", 0)
+	links, err := c.DiscoverIdeas(context.Background(), "https://example.com/resources/ideas/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 2 {
+		t.Fatalf("got %d links: %+v", len(links), links)
+	}
+	if links[0].Person != "kahneman" || links[1].Person != "valen" {
+		t.Fatalf("persons = %q, %q", links[0].Person, links[1].Person)
+	}
+}
+
+func TestPersonFromSlug(t *testing.T) {
+	cases := map[string]string{
+		"/resources/ideas/kahneman-daniel/": "kahneman",
+		"/resources/ideas/valen-leigh/":     "valen",
+		"/x/popper-karl":                    "popper",
+	}
+	for in, want := range cases {
+		if got := personFromSlug(in); got != want {
+			t.Errorf("personFromSlug(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestResolveSSRNPDF(t *testing.T) {
 	f := &mapFetcher{pages: map[string]string{
 		"https://papers.ssrn.com/sol3/papers.cfm?abstract_id=123": `
