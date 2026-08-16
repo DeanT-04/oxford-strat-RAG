@@ -120,7 +120,10 @@ higher ones. Interfaces are defined by the consumer (`crawl.Fetcher`,
 7. ✅ Ideas profiles: the 4 thinker pages under `/resources/ideas/` are
    scraped as `kind: html` with a `person` key (kahneman, mandelbrot, popper,
    valen) and indexed alongside the strategy reviews.
-8. Future: dense (semantic) embeddings behind the `Extractor`/index seam,
+8. ✅ Links directory: `/resources/links/` is captured to `data/links.json`
+   (grouped external links + partner blurbs, never fetched/indexed) with a
+   `kind: links` manifest pointer; `vellum links [group]` lists it.
+9. Future: dense (semantic) embeddings behind the `Extractor`/index seam,
    OCR for scanned PDFs, `vellum serve` HTTP interface.
 
 ## How to evolve this file

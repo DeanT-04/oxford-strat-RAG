@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -54,6 +55,36 @@ const (
 	HostOxfordstrat = "oxfordstrat"
 	HostExternal    = "external"
 )
+
+// LinkItem is one curated external link from the links directory.
+type LinkItem struct {
+	Group string // group key (digital-libraries, research, …, partners)
+	Name  string
+	URL   string
+	Blurb string // partner prose, if any
+}
+
+// linkGroupLabels maps a group key to the heading text it matches.
+var linkGroupLabels = []struct{ key, label string }{
+	{"digital-libraries", "Digital Libraries"},
+	{"research", "Research"},
+	{"cta-data", "CTA Data"},
+	{"publications", "Publications"},
+	{"exchanges", "Exchanges"},
+	{"data", "Data"},
+	{"partners", "Partners"},
+}
+
+// groupKeyFor returns the group key whose label appears in a heading, or "".
+func groupKeyFor(heading string) string {
+	h := normalizeHeading(heading)
+	for _, g := range linkGroupLabels {
+		if strings.Contains(h, strings.ToUpper(g.label)) {
+			return g.key
+		}
+	}
+	return ""
+}
 
 // Crawler walks same-host HTML pages up to a depth limit, collecting PDFs.
 type Crawler struct {
@@ -410,6 +441,141 @@ func classifyArticleLink(u *url.URL, selfHost, title string) (ArticleLink, bool)
 func isPDFDownloadURL(u *url.URL) bool {
 	q := u.Query()
 	return strings.EqualFold(q.Get("type"), "pdf") || strings.EqualFold(q.Get("format"), "pdf")
+}
+
+// DiscoverLinks parses the links directory once and returns the curated
+// external links grouped by section, plus the partner blurbs. Nothing is
+// fetched beyond the index page itself.
+func (c *Crawler) DiscoverLinks(ctx context.Context, indexURL string) ([]LinkItem, error) {
+	body, err := c.fetch.Get(ctx, indexURL)
+	if err != nil {
+		return nil, fmt.Errorf("crawl: fetch links index %s: %w", indexURL, err)
+	}
+	doc, err := html.Parse(strings.NewReader(string(body)))
+	if err != nil {
+		return nil, fmt.Errorf("crawl: parse links index %s: %w", indexURL, err)
+	}
+	base := pageBase(indexURL)
+
+	var items []LinkItem
+	group := ""
+	var partner *LinkItem
+
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			switch n.Data {
+			case "script", "style", "nav", "header", "footer", "aside", "form":
+				return // skip boilerplate
+			case "h1", "h2", "h3", "h4", "h5", "h6":
+				if k := groupKeyFor(linkText(n)); k != "" {
+					group = k
+					partner = nil
+				}
+			case "strong":
+				txt := strings.TrimSpace(linkText(n))
+				if k := groupKeyFor(txt); k != "" {
+					group = k
+					partner = nil
+				} else if group == "partners" && txt != "" {
+					items = append(items, LinkItem{Group: "partners", Name: txt})
+					partner = &items[len(items)-1]
+				}
+			case "tr":
+				if group != "" && group != "partners" {
+					if item, ok := rowItem(n, base); ok {
+						item.Group = group
+						items = append(items, item)
+					}
+				}
+			}
+		}
+		if n.Type == html.TextNode && partner != nil {
+			partner.Blurb += n.Data
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+
+	// Finalize partners: collapse the blurb and pull the URL from "Website: …".
+	for i := range items {
+		if items[i].Group != "partners" {
+			continue
+		}
+		items[i].Blurb = strings.Join(strings.Fields(items[i].Blurb), " ")
+		if u := websiteURL(items[i].Blurb); u != "" {
+			items[i].URL = u
+		}
+	}
+	return dedupeLinks(items), nil
+}
+
+// rowItem extracts a single name + URL from a links-directory table row.
+func rowItem(tr *html.Node, base *url.URL) (LinkItem, bool) {
+	var item LinkItem
+	var href, name string
+	var find func(*html.Node)
+	find = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			if n.Data == "a" && href == "" {
+				for _, a := range n.Attr {
+					if a.Key == "href" {
+						href = a.Val
+					}
+				}
+			}
+			if n.Data == "td" && name == "" {
+				if t := strings.TrimSpace(linkText(n)); t != "" && !strings.HasPrefix(t, "http") {
+					name = t
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			find(c)
+		}
+	}
+	find(tr)
+	if href == "" {
+		return LinkItem{}, false
+	}
+	abs := resolveURL(base, href)
+	if abs == "" {
+		return LinkItem{}, false
+	}
+	item.URL = abs
+	if name != "" {
+		item.Name = name
+	} else {
+		item.Name = abs
+	}
+	return item, true
+}
+
+var websiteRe = regexp.MustCompile(`(?i)website:\s*(https?://[^\s]+)`)
+
+// websiteURL extracts the partner's site URL from its blurb ("Website: …").
+func websiteURL(blurb string) string {
+	if m := websiteRe.FindStringSubmatch(blurb); len(m) == 2 {
+		return strings.TrimSuffix(m[1], ".")
+	}
+	return ""
+}
+
+// dedupeLinks removes duplicate (group, name, url) entries, preserving order.
+func dedupeLinks(items []LinkItem) []LinkItem {
+	seen := make(map[string]bool)
+	out := make([]LinkItem, 0, len(items))
+	for _, it := range items {
+		key := it.Group + "\x00" + it.Name + "\x00" + it.URL
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, it)
+	}
+	return out
 }
 
 // isHeading reports whether tag is an HTML heading element.

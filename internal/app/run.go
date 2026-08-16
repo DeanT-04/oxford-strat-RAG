@@ -20,6 +20,7 @@ import (
 	"github.com/DeanT-04/oxford-strat-RAG/internal/download"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/fetch"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/htmltext"
+	"github.com/DeanT-04/oxford-strat-RAG/internal/links"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/manifest"
 )
 
@@ -77,18 +78,34 @@ func Run(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) (Summ
 		return sum, nil
 	}
 
-	if len(targets) == 0 {
-		fmt.Fprintln(stdout, "no links discovered")
-		return sum, nil
-	}
-
 	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
 		return sum, fmt.Errorf("create output dir: %w", err)
 	}
 
+	entries := make([]manifest.Entry, 0, len(targets)+1)
+
+	// The links directory is a curated pointer list, captured for completeness
+	// even when no downloadable content is found.
+	if linkEntry, err := captureLinks(ctx, client, cfg); err == nil {
+		entries = append(entries, *linkEntry)
+		sum.Referenced++
+	} else {
+		logger.Warn("links capture failed", "err", err)
+	}
+
+	if len(targets) == 0 {
+		m := manifest.New(cfg.SeedURL, entries)
+		if err := m.WriteFile(cfg.ManifestPath); err != nil {
+			return sum, err
+		}
+		sum.ManifestPath = cfg.ManifestPath
+		fmt.Fprintln(stdout, "no content links discovered")
+		fmt.Fprintf(stdout, "manifest: %s\n", cfg.ManifestPath)
+		return sum, nil
+	}
+
 	downloadable, references := resolveTargets(ctx, client, targets)
 
-	entries := make([]manifest.Entry, 0, len(targets))
 	for _, t := range references {
 		entries = append(entries, manifest.Entry{
 			URL:       t.URL,
@@ -271,6 +288,37 @@ func resolveTargets(ctx context.Context, f crawl.Fetcher, targets []target) (dow
 		downloadable = append(downloadable, t)
 	}
 	return downloadable, references
+}
+
+// captureLinks fetches the links directory and writes data/links.json,
+// returning the manifest pointer entry for it.
+func captureLinks(ctx context.Context, client *fetch.Client, cfg config.Config) (*manifest.Entry, error) {
+	linksURL := strings.TrimSuffix(cfg.SeedURL, "/") + "/links/"
+	cr, err := crawl.New(client, cfg.SeedURL, 0)
+	if err != nil {
+		return nil, err
+	}
+	items, err := cr.DiscoverLinks(ctx, linksURL)
+	if err != nil {
+		return nil, err
+	}
+	groups := make(map[string][]links.Item)
+	for _, it := range items {
+		groups[it.Group] = append(groups[it.Group], links.Item{Name: it.Name, URL: it.URL, Blurb: it.Blurb})
+	}
+	doc := links.New(linksURL, groups)
+	if err := doc.WriteFile(filepath.Join(cfg.OutputDir, "links.json")); err != nil {
+		return nil, err
+	}
+	return &manifest.Entry{
+		URL:       linksURL,
+		Kind:      manifest.KindLinks,
+		Status:    manifest.StatusReference,
+		Host:      hostOf(linksURL, selfHostOf(cfg.SeedURL)),
+		Title:     "External links directory",
+		FoundOn:   cfg.SeedURL,
+		FetchedAt: time.Now(),
+	}, nil
 }
 
 // hostOf classifies a URL as oxfordstrat (same host as selfHost) or external.

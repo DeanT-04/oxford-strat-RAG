@@ -31,6 +31,9 @@ func siteServer(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/resources/ideas/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<html><body>no ideas</body></html>`)
 	})
+	mux.HandleFunc("/resources/links/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>no links</body></html>`)
+	})
 	mux.HandleFunc("/uploads/turtle.pdf", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/pdf")
 		w.Write([]byte("%PDF-1.4\nturtle\n%%EOF"))
@@ -84,8 +87,8 @@ func TestRunEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Count != 3 {
-		t.Fatalf("manifest count = %d, want 3", m.Count)
+	if m.Count != 4 {
+		t.Fatalf("manifest count = %d, want 4 (3 pdfs + links pointer)", m.Count)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "turtle.pdf")); err != nil {
 		t.Fatalf("turtle.pdf missing: %v", err)
@@ -143,7 +146,7 @@ func TestRunNoLinks(t *testing.T) {
 	if _, err := Run(context.Background(), cfg, &out, &strings.Builder{}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "no links discovered") {
+	if !strings.Contains(out.String(), "no content links discovered") {
 		t.Fatalf("output = %q", out.String())
 	}
 }
@@ -197,6 +200,9 @@ func articleSite(t *testing.T) *httptest.Server {
 	mux.HandleFunc("/resources/ideas/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<html><body>no ideas</body></html>`)
 	})
+	mux.HandleFunc("/resources/links/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>no links</body></html>`)
+	})
 	mux.HandleFunc("/trading-strategies/nr7/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=UTF-8")
 		fmt.Fprint(w, `<html><head><title>NR7 Pattern</title></head><body>
@@ -228,10 +234,15 @@ func TestRunHTMLArticle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Count != 1 {
-		t.Fatalf("manifest count = %d", m.Count)
+	if m.Count != 2 {
+		t.Fatalf("manifest count = %d (article + links pointer)", m.Count)
 	}
-	e := m.Entries[0]
+	var e manifest.Entry
+	for _, ent := range m.Entries {
+		if ent.Kind == "html" {
+			e = ent
+		}
+	}
 	if e.Kind != "html" {
 		t.Fatalf("kind = %q", e.Kind)
 	}
@@ -306,6 +317,9 @@ func TestRunIdeasPerson(t *testing.T) {
 	mux.HandleFunc("/resources/ideas/", func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<a href="/resources/ideas/kahneman-daniel/">Kahneman, D.</a>`)
 	})
+	mux.HandleFunc("/resources/links/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>no links</body></html>`)
+	})
 	mux.HandleFunc("/resources/ideas/kahneman-daniel/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprint(w, `<html><head><title>Kahneman</title></head><body><p>prospect theory</p></body></html>`)
@@ -325,12 +339,63 @@ func TestRunIdeasPerson(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Count != 1 {
-		t.Fatalf("count = %d", m.Count)
+	if m.Count != 2 {
+		t.Fatalf("count = %d (idea + links pointer)", m.Count)
 	}
-	e := m.Entries[0]
+	var e manifest.Entry
+	for _, ent := range m.Entries {
+		if ent.Kind == "html" {
+			e = ent
+		}
+	}
 	if e.Kind != "html" || e.Person != "kahneman" {
 		t.Fatalf("entry = %+v", e)
+	}
+}
+
+func TestRunLinksCapture(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/resources/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>index</body></html>`)
+	})
+	mux.HandleFunc("/resources/articles/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>no papers</body></html>`)
+	})
+	mux.HandleFunc("/resources/ideas/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<html><body>no ideas</body></html>`)
+	})
+	mux.HandleFunc("/resources/links/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `<table><tr><td><strong>Data</strong></td></tr>
+			<tr><td>CSI</td><td><a href="http://www.csidata.com/">http://www.csidata.com/</a></td></tr></table>`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	dir := t.TempDir()
+	cfg := baseConfig(srv, dir)
+	cfg.Kinds = "pdf"
+
+	var out, errb strings.Builder
+	if _, err := Run(context.Background(), cfg, &out, &errb); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	// links.json written.
+	if _, err := os.Stat(filepath.Join(dir, "links.json")); err != nil {
+		t.Fatalf("links.json missing: %v", err)
+	}
+	// manifest has a kind=links reference entry.
+	m, err := manifest.ReadFile(cfg.ManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range m.Entries {
+		if e.Kind == manifest.KindLinks && e.Status == manifest.StatusReference {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no kind=links reference entry: %+v", m.Entries)
 	}
 }
 

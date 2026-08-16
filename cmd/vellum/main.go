@@ -19,6 +19,7 @@ import (
 	"github.com/DeanT-04/oxford-strat-RAG/internal/chunk"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/config"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/ingest"
+	"github.com/DeanT-04/oxford-strat-RAG/internal/links"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/query"
 )
 
@@ -43,6 +44,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runIngest(args[1:], stdout, stderr)
 	case "query":
 		return runQuery(args[1:], stdout, stderr)
+	case "links":
+		return runLinks(args[1:], stdout, stderr)
 	case "version", "-v", "--version":
 		fmt.Fprintf(stdout, "vellum %s\n", version)
 		return 0
@@ -148,6 +151,23 @@ func runIngest(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func runLinks(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("links", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	path := fs.String("file", "data/links.json", "links JSON path")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	group := strings.Join(fs.Args(), " ")
+	doc, err := links.ReadFile(*path)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
+	}
+	doc.List(group, stdout)
+	return 0
+}
+
 func runQuery(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("query", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -175,6 +195,7 @@ Usage:
   vellum scrape [flags]   crawl the site and download every PDF
   vellum ingest [flags]   extract text from PDFs and build a BM25 index
   vellum query [flags] Q  search the index and return cited chunks
+  vellum links [group]    list the curated external-links directory
   vellum version          print the version
   vellum help             show this help
 

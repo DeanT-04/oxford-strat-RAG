@@ -437,6 +437,79 @@ func TestPersonFromSlug(t *testing.T) {
 	}
 }
 
+func TestDiscoverLinks(t *testing.T) {
+	f := &mapFetcher{pages: map[string]string{
+		"https://example.com/resources/links/": `
+			<table>
+				<tr><td><strong>Digital Libraries</strong></td></tr>
+				<tr><td>JSTOR</td><td><a href="https://www.jstor.org/">https://www.jstor.org/</a></td></tr>
+				<tr><td><strong>Research</strong></td></tr>
+				<tr><td>SSRN</td><td><a href="https://www.ssrn.com/">https://www.ssrn.com/</a></td></tr>
+				<tr><td><strong>Data</strong></td></tr>
+				<tr><td>CSI</td><td><a href="http://www.csidata.com/">http://www.csidata.com/</a></td></tr>
+			</table>
+			<h2>Partners</h2>
+			<p><strong>CSI</strong>, supplier of data. Website: http://www.csidata.com/</p>
+			<p><strong>MultiCharts</strong> is software. Website: https://www.multicharts.com/</p>
+			<aside><a href="https://twitter.com/x">twitter</a></aside>
+		`,
+	}}
+	c, _ := New(f, "https://example.com/resources/", 0)
+	items, err := c.DiscoverLinks(context.Background(), "https://example.com/resources/links/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	byGroup := map[string][]LinkItem{}
+	for _, it := range items {
+		byGroup[it.Group] = append(byGroup[it.Group], it)
+	}
+	if len(byGroup["digital-libraries"]) != 1 || byGroup["digital-libraries"][0].Name != "JSTOR" {
+		t.Fatalf("digital-libraries = %+v", byGroup["digital-libraries"])
+	}
+	if len(byGroup["data"]) != 1 || byGroup["data"][0].URL != "http://www.csidata.com/" {
+		t.Fatalf("data = %+v", byGroup["data"])
+	}
+	if len(byGroup["partners"]) != 2 {
+		t.Fatalf("partners = %+v", byGroup["partners"])
+	}
+	if byGroup["partners"][0].Name != "CSI" || byGroup["partners"][0].URL != "http://www.csidata.com/" {
+		t.Fatalf("csi partner = %+v", byGroup["partners"][0])
+	}
+	if byGroup["partners"][0].Blurb == "" {
+		t.Fatal("csi blurb must be captured")
+	}
+	// twitter (aside) must be excluded.
+	for _, it := range items {
+		if strings.Contains(it.URL, "twitter") {
+			t.Fatalf("social link leaked: %+v", it)
+		}
+	}
+}
+
+func TestGroupKeyFor(t *testing.T) {
+	if groupKeyFor("CTA Data") != "cta-data" {
+		t.Fatalf("CTA Data should map to cta-data")
+	}
+	if groupKeyFor("Data") != "data" {
+		t.Fatalf("Data should map to data")
+	}
+	if groupKeyFor("Digital Libraries") != "digital-libraries" {
+		t.Fatalf("Digital Libraries mismatch")
+	}
+	if groupKeyFor("LINKS") != "" {
+		t.Fatalf("page title LINKS should not map to a group")
+	}
+}
+
+func TestWebsiteURL(t *testing.T) {
+	if got := websiteURL("CSI, supplier. Website: http://www.csidata.com/"); got != "http://www.csidata.com/" {
+		t.Fatalf("websiteURL = %q", got)
+	}
+	if got := websiteURL("no website here"); got != "" {
+		t.Fatalf("websiteURL = %q, want empty", got)
+	}
+}
+
 func TestResolveSSRNPDF(t *testing.T) {
 	f := &mapFetcher{pages: map[string]string{
 		"https://papers.ssrn.com/sol3/papers.cfm?abstract_id=123": `

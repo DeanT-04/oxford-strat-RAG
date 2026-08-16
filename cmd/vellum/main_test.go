@@ -11,6 +11,7 @@ import (
 
 	"github.com/DeanT-04/oxford-strat-RAG/internal/chunk"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/index"
+	"github.com/DeanT-04/oxford-strat-RAG/internal/links"
 )
 
 func TestRunDispatch(t *testing.T) {
@@ -141,6 +142,30 @@ func TestRunIngestMissingManifest(t *testing.T) {
 	var errb strings.Builder
 	code := run([]string{"ingest", "-manifest", filepath.Join(t.TempDir(), "nope.json")}, &strings.Builder{}, &errb)
 	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+}
+
+func TestRunLinks(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "links.json")
+	doc := links.New("https://x/links/", map[string][]links.Item{
+		"data": {{Name: "CSI", URL: "http://www.csidata.com/"}},
+	})
+	if err := doc.WriteFile(p); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if code := run([]string{"links", "-file", p, "data"}, &out, &strings.Builder{}); code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	if !strings.Contains(out.String(), "CSI") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestRunLinksMissing(t *testing.T) {
+	var errb strings.Builder
+	if code := run([]string{"links", "-file", filepath.Join(t.TempDir(), "nope.json")}, &strings.Builder{}, &errb); code != 1 {
 		t.Fatalf("code = %d, want 1", code)
 	}
 }
