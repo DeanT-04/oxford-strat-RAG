@@ -26,6 +26,13 @@ type PDFLink struct {
 	Title   string // anchor text, if any
 }
 
+// PageLink is a discovered HTML page target (strategy review, profile page).
+type PageLink struct {
+	URL     string // absolute, normalized URL of the page
+	FoundOn string // page URL where the link was discovered
+	Title   string // anchor text, if any
+}
+
 // Crawler walks same-host HTML pages up to a depth limit, collecting PDFs.
 type Crawler struct {
 	fetch    Fetcher
@@ -126,6 +133,138 @@ func (c *Crawler) Discover(ctx context.Context) ([]PDFLink, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].URL < out[j].URL })
 	return out, nil
+}
+
+// articleHeadings are the substrings (matched case-insensitively) that mark
+// the three review sections on the /resources/ index page.
+var articleHeadings = []string{
+	"trading strategies",
+	"trading indicators",
+	"data analysis",
+}
+
+// DiscoverArticles parses indexURL once and returns the same-host HTML page
+// links listed under the review headings (strategy reviews, indicator
+// reviews, data-analysis articles), deduplicated and sorted. It is the
+// HTML/strategy-review analogue of Discover.
+func (c *Crawler) DiscoverArticles(ctx context.Context, indexURL string) ([]PageLink, error) {
+	body, err := c.fetch.Get(ctx, indexURL)
+	if err != nil {
+		return nil, fmt.Errorf("crawl: fetch articles index %s: %w", indexURL, err)
+	}
+
+	base := pageBase(indexURL)
+	anchors, err := extractSectionLinks(base, body, articleHeadings)
+	if err != nil {
+		return nil, fmt.Errorf("crawl: parse articles index %s: %w", indexURL, err)
+	}
+
+	seen := make(map[string]PageLink)
+	for _, a := range anchors {
+		u, err := url.Parse(a.href)
+		if err != nil {
+			continue
+		}
+		if normalizeHost(u.Host) != c.host {
+			continue // same-host only
+		}
+		if !isPageURL(u) {
+			continue
+		}
+		if _, ok := seen[u.String()]; !ok {
+			seen[u.String()] = PageLink{URL: u.String(), FoundOn: indexURL, Title: a.text}
+		}
+	}
+
+	out := make([]PageLink, 0, len(seen))
+	for _, p := range seen {
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].URL < out[j].URL })
+	return out, nil
+}
+
+// extractSectionLinks walks an HTML document and returns every <a href>
+// resolved against base that appears under one of the given section headings,
+// stopping at the next heading that does not match.
+func extractSectionLinks(base *url.URL, body []byte, headings []string) ([]anchor, error) {
+	doc, err := html.Parse(strings.NewReader(string(body)))
+	if err != nil {
+		return nil, err
+	}
+
+	var links []anchor
+	section := ""
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			// Subtrees that never carry review links; also close any open
+			// section so sidebar/nav/footer links are not collected.
+			switch n.Data {
+			case "script", "style", "nav", "header", "footer", "aside", "form":
+				section = ""
+				return
+			}
+			// Section headers are <hN> headings or (on the live site)
+			// <strong> cells; rating grades are also <strong>, so only a
+			// strong that matches a target heading opens a section — a
+			// non-matching strong is ignored rather than closing it.
+			if isHeading(n.Data) {
+				if h := normalizeHeading(linkText(n)); h != "" {
+					if matchesHeading(h, headings) {
+						section = h
+					} else {
+						section = ""
+					}
+				}
+			} else if n.Data == "strong" || n.Data == "b" {
+				if h := normalizeHeading(linkText(n)); h != "" && matchesHeading(h, headings) {
+					section = h
+				}
+			} else if n.Data == "a" && section != "" {
+				var href string
+				for _, attr := range n.Attr {
+					if attr.Key == "href" {
+						href = attr.Val
+					}
+				}
+				if href != "" {
+					if abs := resolveURL(base, href); abs != "" {
+						links = append(links, anchor{href: abs, text: strings.TrimSpace(linkText(n))})
+					}
+				}
+			}
+		}
+		for child := n.FirstChild; child != nil; child = child.NextSibling {
+			walk(child)
+		}
+	}
+	walk(doc)
+	return links, nil
+}
+
+// isHeading reports whether tag is an HTML heading element.
+func isHeading(tag string) bool {
+	switch tag {
+	case "h1", "h2", "h3", "h4", "h5", "h6":
+		return true
+	}
+	return false
+}
+
+// normalizeHeading upper-cases and collapses whitespace.
+func normalizeHeading(s string) string {
+	return strings.Join(strings.Fields(strings.ToUpper(s)), " ")
+}
+
+// matchesHeading reports whether a normalized heading contains any target.
+func matchesHeading(h string, headings []string) bool {
+	for _, t := range headings {
+		if strings.Contains(h, strings.ToUpper(t)) {
+			return true
+		}
+	}
+	return false
 }
 
 // anchor is a resolved link with its anchor text.

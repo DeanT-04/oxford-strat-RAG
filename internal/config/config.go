@@ -9,6 +9,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -22,7 +23,8 @@ const (
 	DefaultTimeout     = 30 * time.Second
 	DefaultRetries     = 3
 	DefaultPoliteness  = 250 * time.Millisecond
-	DefaultMaxFileSize = 512 << 20 // 512 MiB per file
+	DefaultMaxFileSize = 512 << 20  // 512 MiB per file
+	DefaultKinds       = "pdf,html" // content kinds gathered by scrape
 )
 
 // Config holds every tunable for a scrape run. Zero values are never valid;
@@ -41,6 +43,7 @@ type Config struct {
 	Resume       bool          // skip files that already exist locally
 	DryRun       bool          // discover and report only; download nothing
 	Verbose      bool          // verbose logging
+	Kinds        string        // comma-separated content kinds to gather (pdf, html, …)
 }
 
 // Default returns a Config populated with safe, production-sane defaults.
@@ -56,6 +59,7 @@ func Default() Config {
 		UserAgent:    DefaultUserAgent,
 		Politeness:   DefaultPoliteness,
 		MaxFileSize:  DefaultMaxFileSize,
+		Kinds:        DefaultKinds,
 	}
 }
 
@@ -79,6 +83,23 @@ func (c Config) ResolveConcurrency() int {
 		return c.Concurrency
 	}
 	return AutoConcurrency(runtime.NumCPU())
+}
+
+// ParseKinds splits a comma-separated kind list into a set, trimming
+// whitespace and dropping empty tokens. An empty list yields an empty set.
+func ParseKinds(s string) map[string]bool {
+	set := make(map[string]bool)
+	for _, k := range strings.Split(s, ",") {
+		if k = strings.TrimSpace(k); k != "" {
+			set[k] = true
+		}
+	}
+	return set
+}
+
+// HasKind reports whether cfg.Kinds includes k.
+func (c Config) HasKind(k string) bool {
+	return ParseKinds(c.Kinds)[k]
 }
 
 // Validate checks the configuration and returns a descriptive error for the
@@ -187,6 +208,7 @@ func ApplyEnv(cfg *Config, getenv func(string) string) error {
 	setString("VELLUM_OUTPUT_DIR", &cfg.OutputDir)
 	setString("VELLUM_MANIFEST_PATH", &cfg.ManifestPath)
 	setString("VELLUM_USER_AGENT", &cfg.UserAgent)
+	setString("VELLUM_KINDS", &cfg.Kinds)
 
 	for _, step := range []func() error{
 		func() error { return setInt("VELLUM_CONCURRENCY", &cfg.Concurrency) },

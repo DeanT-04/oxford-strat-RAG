@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/DeanT-04/oxford-strat-RAG/internal/chunk"
+	"github.com/DeanT-04/oxford-strat-RAG/internal/htmltext"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/index"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/manifest"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/text"
@@ -77,15 +79,20 @@ func Run(opts Options, stderr io.Writer) (Summary, error) {
 		if e.Status != manifest.StatusDownloaded {
 			continue
 		}
+		// Curated pointers (links directory, video references) carry no
+		// queryable text and are skipped by design.
+		switch e.KindOf() {
+		case manifest.KindLinks, manifest.KindVideo:
+			continue
+		}
 		sum.Docs++
 
-		pdfPath := filepath.Join(dataDir, e.LocalPath)
 		title := e.Title
 		if title == "" {
 			title = e.LocalPath
 		}
 
-		raw, err := extractor.Extract(pdfPath)
+		raw, err := extractEntryText(e, dataDir, extractor)
 		if err != nil {
 			sum.Failed++
 			sum.Results = append(sum.Results, DocResult{
@@ -99,12 +106,18 @@ func Run(opts Options, stderr io.Writer) (Summary, error) {
 			sum.Results = append(sum.Results, DocResult{
 				Source: e.LocalPath, Title: title, Status: "no_text",
 			})
-			logger.Warn("no extractable text (likely scanned)", "source", e.LocalPath)
+			logger.Warn("no extractable text", "source", e.LocalPath)
 			continue
 		}
 
 		cs := chunk.Split(
-			chunk.Doc{ID: e.LocalPath, Source: e.LocalPath, Title: title},
+			chunk.Doc{
+				ID:        e.LocalPath,
+				Source:    e.LocalPath,
+				Title:     title,
+				Kind:      e.KindOf(),
+				SourceURL: e.URL,
+			},
 			raw, opts.MaxChunk, opts.MinChunk,
 		)
 		chunks = append(chunks, cs...)
@@ -121,4 +134,31 @@ func Run(opts Options, stderr io.Writer) (Summary, error) {
 	}
 	sum.IndexPath = opts.IndexPath
 	return sum, nil
+}
+
+// extractEntryText returns the plain text of a downloaded entry, dispatching
+// on its kind: PDFs go through the text extractor, HTML pages through
+// htmltext, and video transcripts are read as raw text.
+func extractEntryText(e manifest.Entry, dataDir string, extractor text.Extractor) (string, error) {
+	path := filepath.Join(dataDir, e.LocalPath)
+	switch e.KindOf() {
+	case manifest.KindHTML:
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read html: %w", err)
+		}
+		res, err := htmltext.Extract(b)
+		if err != nil {
+			return "", err
+		}
+		return res.Text, nil
+	case manifest.KindVideoText:
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read transcript: %w", err)
+		}
+		return string(b), nil
+	default:
+		return extractor.Extract(path)
+	}
 }

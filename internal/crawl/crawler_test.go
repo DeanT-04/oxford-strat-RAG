@@ -279,3 +279,111 @@ func TestPageBase(t *testing.T) {
 		t.Fatalf("fallback should have empty host, got %q", got.Host)
 	}
 }
+
+func TestDiscoverArticles(t *testing.T) {
+	f := &mapFetcher{pages: map[string]string{
+		"https://example.com/resources/": `
+			<nav><a href="/about/">About</a></nav>
+			<h2>Reviews of Trading Strategies (Public Domain)</h2>
+			<ul>
+				<li><a href="/trading-strategies/nr7/">NR7 Pattern</a></li>
+				<li><a href="/ideas/toby-crabel-narrow-range-1/">Toby Crabel</a></li>
+				<li><a href="/trading-strategies/nr7/">NR7 duplicate</a></li>
+				<li><a href="chart.png">chart</a></li>
+			</ul>
+			<h2>Reviews of Trading Indicators</h2>
+			<a href="/indicators/macd/">MACD</a>
+			<h2>Data Analysis</h2>
+			<a href="/data/equity-curve/">Equity Curve</a>
+			<h2>Blog</h2>
+			<a href="/blog/popper-induction/">popper</a>
+		`,
+	}}
+	c, err := New(f, "https://example.com/resources/", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	links, err := c.DiscoverArticles(context.Background(), "https://example.com/resources/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var urls []string
+	for _, l := range links {
+		urls = append(urls, l.URL)
+	}
+	want := []string{
+		"https://example.com/data/equity-curve/",
+		"https://example.com/ideas/toby-crabel-narrow-range-1/",
+		"https://example.com/indicators/macd/",
+		"https://example.com/trading-strategies/nr7/",
+	}
+	if len(urls) != len(want) {
+		t.Fatalf("got %d links %v, want %d", len(urls), urls, len(want))
+	}
+	for i := range want {
+		if urls[i] != want[i] {
+			t.Errorf("links[%d] = %q, want %q", i, urls[i], want[i])
+		}
+	}
+	// The external/nav links must be excluded; duplicates deduped.
+	if links[3].Title != "NR7 Pattern" {
+		t.Fatalf("title = %q", links[3].Title)
+	}
+}
+
+func TestDiscoverArticlesSeedFailure(t *testing.T) {
+	f := &mapFetcher{err: errors.New("boom")}
+	c, _ := New(f, "https://example.com/", 0)
+	if _, err := c.DiscoverArticles(context.Background(), "https://example.com/"); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestExtractSectionLinksExternalExcluded(t *testing.T) {
+	base, _ := url.Parse("https://example.com/resources/")
+	body := []byte(`<h2>Data Analysis</h2>
+		<a href="/data/a/">local</a>
+		<a href="https://other.com/x/">external</a>`)
+	anchors, err := extractSectionLinks(base, body, articleHeadings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(anchors) != 2 {
+		t.Fatalf("len = %d", len(anchors))
+	}
+}
+
+func TestExtractSectionLinksStrongHeaders(t *testing.T) {
+	base, _ := url.Parse("https://example.com/resources/")
+	// Mirrors the live layout: section headers are <strong> table cells and
+	// the rating grade is a <strong> inside a link row; the sidebar nav lives
+	// in an <aside> and must be excluded.
+	body := []byte(`
+		<table><tr><td><strong>REVIEWS OF TRADING STRATEGIES (PUBLIC DOMAIN)</strong></td></tr>
+		<tr><td><a href="/trading-strategies/nr7/">NR7 Pattern</a> | Rating: A/B/<strong>C</strong>/D</td></tr>
+		<tr><td><strong>DATA ANALYSIS</strong></td></tr>
+		<tr><td><a href="/data/global-market-correlations/">Global Market Correlations</a></td></tr>
+		</table>
+		<aside><ul><li><a href="/resources/articles/">Articles</a></li>
+		<li><a href="/resources/ideas/">Ideas</a></li></ul></aside>`)
+	anchors, err := extractSectionLinks(base, body, articleHeadings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var urls []string
+	for _, a := range anchors {
+		urls = append(urls, a.href)
+	}
+	want := []string{
+		"https://example.com/trading-strategies/nr7/",
+		"https://example.com/data/global-market-correlations/",
+	}
+	if len(urls) != len(want) {
+		t.Fatalf("urls = %v, want %v", urls, want)
+	}
+	for i := range want {
+		if urls[i] != want[i] {
+			t.Errorf("urls[%d] = %q, want %q", i, urls[i], want[i])
+		}
+	}
+}

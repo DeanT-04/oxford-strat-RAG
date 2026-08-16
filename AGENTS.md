@@ -49,6 +49,7 @@ internal/crawl/    BFS discovery of PDF links (same-host, depth-limited)
 internal/download/ worker pool: streaming, atomic writes, sha256, resume
 internal/manifest/ JSON manifest (atomic write)
 internal/text/     PDF -> text (pdftotext + pure-Go fallback) + tokenizer
+internal/htmltext/ HTML -> text (article body + rating + title)
 internal/chunk/    paragraph/sentence chunking with source metadata
 internal/index/    BM25 index: build, search, JSON persistence
 internal/ingest/   manifest -> text -> chunk -> index -> save
@@ -108,7 +109,10 @@ higher ones. Interfaces are defined by the consumer (`crawl.Fetcher`,
 3. ✅ Query: `vellum query "..."` → ranked chunks + citations.
 4. ✅ Skill: `/vellum-rag` wraps the query CLI; the host agent answers from
    retrieved evidence — **no extra LLM API key, no Ollama**.
-5. Future: dense (semantic) embeddings behind the `Extractor`/index seam,
+5. ✅ HTML strategy reviews: `vellum scrape --kinds pdf,html` also indexes the
+   ~128 review articles (kind=html) with rating + source URL; `ingest`
+   dispatches on kind.
+6. Future: dense (semantic) embeddings behind the `Extractor`/index seam,
    OCR for scanned PDFs, `vellum serve` HTTP interface.
 
 ## How to evolve this file

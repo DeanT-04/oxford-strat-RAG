@@ -169,3 +169,26 @@ func TestFromEnvError(t *testing.T) {
 		t.Fatal("expected parse error")
 	}
 }
+
+func TestParseKinds(t *testing.T) {
+	set := ParseKinds("pdf, html ,video-text")
+	if len(set) != 3 || !set["pdf"] || !set["html"] || !set["video-text"] {
+		t.Fatalf("set = %v", set)
+	}
+	if len(ParseKinds("")) != 0 {
+		t.Fatal("empty string must yield empty set")
+	}
+	if len(ParseKinds("  ,  ")) != 0 {
+		t.Fatal("whitespace-only must yield empty set")
+	}
+}
+
+func TestHasKind(t *testing.T) {
+	cfg := Default()
+	if !cfg.HasKind("pdf") || !cfg.HasKind("html") {
+		t.Fatalf("default kinds should include pdf and html: %q", cfg.Kinds)
+	}
+	if cfg.HasKind("video-text") {
+		t.Fatalf("default kinds should not include video-text yet: %q", cfg.Kinds)
+	}
+}

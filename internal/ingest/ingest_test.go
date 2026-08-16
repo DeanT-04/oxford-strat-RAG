@@ -111,3 +111,53 @@ func TestRunMissingManifest(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestRunHTMLDispatch(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	html := `<html><head><title>NR7 Pattern</title></head><body>
+		<h1>NR7 Pattern</h1><p>The NR7 setup is the narrowest range of the last seven bars.</p>
+	</body></html>`
+	if err := os.WriteFile(filepath.Join(dataDir, "nr7.html"), []byte(html), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := manifest.New("https://x", []manifest.Entry{
+		{URL: "https://x/trading-strategies/nr7/", LocalPath: "nr7.html", Title: "NR7", Kind: manifest.KindHTML, Status: manifest.StatusDownloaded},
+		{URL: "https://x/links/", LocalPath: "links.json", Kind: manifest.KindLinks, Status: manifest.StatusDownloaded},
+	})
+	mp := filepath.Join(dir, "manifest.json")
+	if err := m.WriteFile(mp); err != nil {
+		t.Fatal(err)
+	}
+
+	indexPath := filepath.Join(dir, "index.json")
+	sum, err := Run(Options{ManifestPath: mp, DataDir: dataDir, IndexPath: indexPath, MinChunk: 1}, &strings.Builder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// links entry skipped; only the html doc counts.
+	if sum.Docs != 1 || sum.Indexed != 1 {
+		t.Fatalf("docs/indexed = %d/%d", sum.Docs, sum.Indexed)
+	}
+
+	ix, err := index.Load(indexPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ix.Chunks) == 0 {
+		t.Fatal("no chunks produced")
+	}
+	c := ix.Chunks[0]
+	if c.Kind != manifest.KindHTML {
+		t.Fatalf("chunk kind = %q", c.Kind)
+	}
+	if c.SourceURL != "https://x/trading-strategies/nr7/" {
+		t.Fatalf("chunk source_url = %q", c.SourceURL)
+	}
+	if !strings.Contains(c.Text, "NR7") {
+		t.Fatalf("chunk text missing content: %q", c.Text)
+	}
+}

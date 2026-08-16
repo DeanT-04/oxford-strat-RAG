@@ -28,6 +28,12 @@ func Run(indexPath, q string, k int, w io.Writer) error {
 	for i, h := range hits {
 		fmt.Fprintf(w, "[%d] %.4f  %s\n", i+1, h.Score, h.Chunk.Title)
 		fmt.Fprintf(w, "    source: %s\n", h.Chunk.Source)
+		if h.Chunk.SourceURL != "" {
+			fmt.Fprintf(w, "    url:    %s\n", h.Chunk.SourceURL)
+		}
+		if h.Chunk.Speaker != "" || h.Chunk.StartTime != "" {
+			fmt.Fprintf(w, "    talk:   %s %s\n", h.Chunk.Speaker, h.Chunk.StartTime)
+		}
 		fmt.Fprintf(w, "    %s\n\n", snippet(h.Chunk.Text, 320))
 	}
 	return nil

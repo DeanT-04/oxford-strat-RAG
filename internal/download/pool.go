@@ -66,18 +66,37 @@ func New(f Fetcher, outputDir string, maxSize int64, resume bool) *Pool {
 	}
 }
 
-// DownloadAll downloads each URL, returning one Result per input, in input
-// order. Filenames are assigned deterministically up front (see assignNames)
-// so results are stable across runs regardless of worker scheduling.
+// Target is a single download job: a URL plus its content kind, which
+// determines the file extension and the content validation applied.
+type Target struct {
+	URL  string
+	Kind string // "pdf" (default) | "html" | "video-text"
+}
+
+// DownloadAll downloads each URL as a PDF, returning one Result per input, in
+// input order. It is a convenience wrapper around DownloadTargets for the
+// common PDF-only case.
 func (p *Pool) DownloadAll(ctx context.Context, urls []string, conc int) []Result {
+	targets := make([]Target, len(urls))
+	for i, u := range urls {
+		targets[i] = Target{URL: u, Kind: "pdf"}
+	}
+	return p.DownloadTargets(ctx, targets, conc)
+}
+
+// DownloadTargets downloads each target, returning one Result per input, in
+// input order. Filenames are assigned deterministically up front (see
+// assignTargetNames) so results are stable across runs regardless of worker
+// scheduling.
+func (p *Pool) DownloadTargets(ctx context.Context, targets []Target, conc int) []Result {
 	if conc < 1 {
 		conc = 1
 	}
-	results := make([]Result, len(urls))
-	if len(urls) == 0 {
+	results := make([]Result, len(targets))
+	if len(targets) == 0 {
 		return results
 	}
-	names := assignNames(urls)
+	names := assignTargetNames(targets)
 
 	jobs := make(chan int)
 	var wg sync.WaitGroup
@@ -86,13 +105,13 @@ func (p *Pool) DownloadAll(ctx context.Context, urls []string, conc int) []Resul
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				results[i] = p.downloadOne(ctx, urls[i], names[i])
+				results[i] = p.downloadOneKind(ctx, targets[i].URL, names[i], targets[i].Kind)
 			}
 		}()
 	}
 	go func() {
 		defer close(jobs)
-		for i := range urls {
+		for i := range targets {
 			select {
 			case jobs <- i:
 			case <-ctx.Done():
@@ -104,8 +123,14 @@ func (p *Pool) DownloadAll(ctx context.Context, urls []string, conc int) []Resul
 	return results
 }
 
-// downloadOne fetches a single URL and writes it atomically.
+// downloadOne fetches a single URL as a PDF and writes it atomically.
 func (p *Pool) downloadOne(ctx context.Context, rawURL, name string) Result {
+	return p.downloadOneKind(ctx, rawURL, name, "pdf")
+}
+
+// downloadOneKind fetches a single URL and writes it atomically, validating
+// the content against its kind.
+func (p *Pool) downloadOneKind(ctx context.Context, rawURL, name, kind string) Result {
 	res := Result{URL: rawURL, FetchedAt: time.Now()}
 
 	if _, err := url.ParseRequestURI(rawURL); err != nil {
@@ -171,9 +196,9 @@ func (p *Pool) downloadOne(ctx context.Context, rawURL, name string) Result {
 		res.Err = fmt.Sprintf("file exceeds max size %d bytes", p.maxSize)
 		return res
 	}
-	if !isPDFFile(tmpName) {
+	if err := validateContent(kind, tmpName); err != nil {
 		res.Status = StatusFailed
-		res.Err = "content is not a PDF"
+		res.Err = err.Error()
 		return res
 	}
 
@@ -199,13 +224,19 @@ var illegalChars = regexp.MustCompile(`[<>:"/\\|?*\x00-\x1f]`)
 // guarantees a .pdf suffix, and caps length. Returns an error for a URL that
 // yields no usable name.
 func sanitizeName(rawURL string) (string, error) {
+	return sanitizeNameExt(rawURL, ".pdf")
+}
+
+// sanitizeNameExt is sanitizeName for an arbitrary extension (e.g. ".html",
+// ".txt"). It guarantees the given suffix and caps the total length.
+func sanitizeNameExt(rawURL, ext string) (string, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "", err
 	}
 	name := path.Base(u.Path)
 	if name == "/" || name == "." || name == ".." || name == "" {
-		name = "document.pdf"
+		name = "document" + ext
 	} else {
 		if decoded, err := url.PathUnescape(name); err == nil {
 			name = decoded
@@ -213,33 +244,56 @@ func sanitizeName(rawURL string) (string, error) {
 		name = illegalChars.ReplaceAllString(name, "_")
 		name = strings.Trim(name, " .")
 		if name == "" {
-			name = "document.pdf"
+			name = "document" + ext
 		}
-		if !strings.HasSuffix(strings.ToLower(name), ".pdf") {
-			name += ".pdf"
+		if !strings.HasSuffix(strings.ToLower(name), strings.ToLower(ext)) {
+			name += ext
 		}
 		if len(name) > 255 {
-			name = name[:240] + ".pdf"
+			name = name[:255-len(ext)] + ext
 		}
 	}
 	return name, nil
 }
 
-// assignNames deterministically maps URLs to unique filenames, appending a
-// short content hash only on collision.
+// extForKind maps a content kind to the file extension used on disk.
+func extForKind(kind string) string {
+	switch kind {
+	case "html":
+		return ".html"
+	case "video-text", "txt":
+		return ".txt"
+	default:
+		return ".pdf"
+	}
+}
+
+// assignNames deterministically maps URLs to unique .pdf filenames, appending
+// a short content hash only on collision.
 func assignNames(urls []string) []string {
-	names := make([]string, len(urls))
-	used := make(map[string]string, len(urls))
+	targets := make([]Target, len(urls))
 	for i, u := range urls {
-		base, err := sanitizeName(u)
+		targets[i] = Target{URL: u, Kind: "pdf"}
+	}
+	return assignTargetNames(targets)
+}
+
+// assignTargetNames deterministically maps targets to unique filenames,
+// appending a short content hash only on collision.
+func assignTargetNames(targets []Target) []string {
+	names := make([]string, len(targets))
+	used := make(map[string]string, len(targets))
+	for i, t := range targets {
+		ext := extForKind(t.Kind)
+		base, err := sanitizeNameExt(t.URL, ext)
 		if err != nil {
-			base = "document.pdf"
+			base = "document" + ext
 		}
 		name := base
-		if prev, ok := used[base]; ok && prev != u {
-			name = withHash(base, u)
+		if prev, ok := used[base]; ok && prev != t.URL {
+			name = withHash(base, t.URL)
 		}
-		used[name] = u
+		used[name] = t.URL
 		names[i] = name
 	}
 	return names
@@ -279,4 +333,17 @@ func isPDFFile(path string) bool {
 	buf := make([]byte, 1024)
 	n, _ := f.Read(buf)
 	return fetch.IsPDF(buf[:n])
+}
+
+// validateContent verifies that a downloaded file's bytes match its kind.
+// PDFs must carry the PDF magic header; HTML and transcript text are accepted
+// as-is because discovery already scoped them to same-host page links.
+func validateContent(kind, tmpName string) error {
+	switch kind {
+	case "pdf":
+		if !isPDFFile(tmpName) {
+			return fmt.Errorf("content is not a PDF")
+		}
+	}
+	return nil
 }

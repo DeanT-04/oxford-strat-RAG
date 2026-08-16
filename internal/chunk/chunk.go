@@ -16,19 +16,27 @@ const (
 
 // Doc identifies the source document a chunk belongs to.
 type Doc struct {
-	ID     string // stable unique key (the local PDF filename)
-	Source string // display name of the file
-	Title  string // paper title, if known
+	ID        string // stable unique key (the local file name)
+	Source    string // display name of the file
+	Title     string // paper/article/talk title, if known
+	Kind      string // "pdf" | "html" | "video-text"
+	SourceURL string // canonical URL of the source, for citations
+	StartTime string // transcript timestamp (video-text only)
+	Speaker   string // talk speaker (video-text only)
 }
 
 // Chunk is one retrievable unit of text.
 type Chunk struct {
-	ID     string `json:"id"`
-	DocID  string `json:"doc_id"`
-	Source string `json:"source"`
-	Title  string `json:"title"`
-	Order  int    `json:"order"`
-	Text   string `json:"text"`
+	ID        string `json:"id"`
+	DocID     string `json:"doc_id"`
+	Source    string `json:"source"`
+	Title     string `json:"title"`
+	Kind      string `json:"kind,omitempty"`
+	SourceURL string `json:"source_url,omitempty"`
+	StartTime string `json:"start_time,omitempty"`
+	Speaker   string `json:"speaker,omitempty"`
+	Order     int    `json:"order"`
+	Text      string `json:"text"`
 }
 
 // sentenceSplitter matches a sentence terminator followed by whitespace.
@@ -55,12 +63,16 @@ func Split(doc Doc, raw string, maxLen, minLen int) []Chunk {
 				continue
 			}
 			chunks = append(chunks, Chunk{
-				ID:     fmt.Sprintf("%s:%d", doc.ID, order),
-				DocID:  doc.ID,
-				Source: doc.Source,
-				Title:  doc.Title,
-				Order:  order,
-				Text:   piece,
+				ID:        fmt.Sprintf("%s:%d", doc.ID, order),
+				DocID:     doc.ID,
+				Source:    doc.Source,
+				Title:     doc.Title,
+				Kind:      doc.Kind,
+				SourceURL: doc.SourceURL,
+				StartTime: doc.StartTime,
+				Speaker:   doc.Speaker,
+				Order:     order,
+				Text:      piece,
 			})
 			order++
 		}

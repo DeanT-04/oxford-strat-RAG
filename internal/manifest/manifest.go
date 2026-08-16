@@ -12,7 +12,8 @@ import (
 	"time"
 )
 
-// Entry describes a single discovered PDF and the result of fetching it.
+// Entry describes a single discovered resource and the result of fetching it.
+// Kind distinguishes PDFs from HTML articles, links, and video transcripts.
 type Entry struct {
 	URL         string    `json:"url"`
 	FinalURL    string    `json:"final_url,omitempty"`
@@ -20,9 +21,16 @@ type Entry struct {
 	Size        int64     `json:"size"`
 	SHA256      string    `json:"sha256,omitempty"`
 	ContentType string    `json:"content_type,omitempty"`
+	Kind        string    `json:"kind,omitempty"`
 	Status      string    `json:"status"`
 	FoundOn     string    `json:"found_on,omitempty"`
 	Title       string    `json:"title,omitempty"`
+	Rating      string    `json:"rating,omitempty"`
+	Host        string    `json:"host,omitempty"`
+	Person      string    `json:"person,omitempty"`
+	Speaker     string    `json:"speaker,omitempty"`
+	Event       string    `json:"event,omitempty"`
+	License     string    `json:"license,omitempty"`
 	Error       string    `json:"error,omitempty"`
 	FetchedAt   time.Time `json:"fetched_at"`
 }
@@ -40,7 +48,28 @@ const (
 	StatusDownloaded = "downloaded"
 	StatusSkipped    = "skipped"
 	StatusFailed     = "failed"
+	// StatusReference marks a resource that is documented but not stored
+	// (paywall, dead host, or no captions). Ingest skips these.
+	StatusReference = "reference"
 )
+
+// Kind values used by Entry.Kind.
+const (
+	KindPDF       = "pdf"        // PDF document (the historical default)
+	KindHTML      = "html"       // HTML article/profile page
+	KindLinks     = "links"      // curated external-links directory
+	KindVideo     = "video"      // video talk (metadata / reference only)
+	KindVideoText = "video-text" // video transcript text
+)
+
+// KindOf returns e.Kind, defaulting to KindPDF so legacy manifests that
+// predate the kind field keep working unchanged.
+func (e Entry) KindOf() string {
+	if e.Kind == "" {
+		return KindPDF
+	}
+	return e.Kind
+}
 
 // New assembles a Manifest with a timestamp and the current entry count.
 func New(seed string, entries []Entry) *Manifest {

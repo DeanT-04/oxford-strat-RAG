@@ -323,3 +323,47 @@ func TestDownloadOneReadError(t *testing.T) {
 		t.Fatalf("status=%s err=%s", res.Status, res.Err)
 	}
 }
+
+func TestDownloadTargetsHTML(t *testing.T) {
+	body := `<html><body><h1>NR7</h1></body></html>`
+	f := &stubFetcher{resp: map[string]*http.Response{
+		"https://x.com/trading-strategies/nr7/": okResp("https://x.com/trading-strategies/nr7/", body, "text/html"),
+	}}
+	dir := t.TempDir()
+	p := New(f, dir, 1<<20, false)
+	results := p.DownloadTargets(context.Background(), []Target{
+		{URL: "https://x.com/trading-strategies/nr7/", Kind: "html"},
+	}, 1)
+	if len(results) != 1 || results[0].Status != StatusDownloaded {
+		t.Fatalf("results = %+v", results)
+	}
+	if results[0].LocalPath != "nr7.html" {
+		t.Fatalf("local path = %q, want nr7.html", results[0].LocalPath)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "nr7.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != body {
+		t.Fatalf("content mismatch")
+	}
+}
+
+func TestSanitizeNameExt(t *testing.T) {
+	cases := []struct{ in, ext, want string }{
+		{"https://x.com/trading-strategies/nr7/", ".html", "nr7.html"},
+		{"https://x.com/a/slug", ".html", "slug.html"},
+		{"https://x.com/a/noext", ".txt", "noext.txt"},
+		{"https://x.com/", ".html", "document.html"},
+	}
+	for _, tc := range cases {
+		got, err := sanitizeNameExt(tc.in, tc.ext)
+		if err != nil {
+			t.Errorf("sanitizeNameExt(%q) err: %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("sanitizeNameExt(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
