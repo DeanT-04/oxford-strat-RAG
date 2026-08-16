@@ -102,6 +102,41 @@ func TestRunExtractError(t *testing.T) {
 	}
 }
 
+func TestWithinDir(t *testing.T) {
+	dir := t.TempDir()
+	if !withinDir(dir, filepath.Join(dir, "a.pdf")) {
+		t.Fatal("same-dir path should be within")
+	}
+	if !withinDir(dir, filepath.Join(dir, "videos", "x.txt")) {
+		t.Fatal("subdir path should be within")
+	}
+	if withinDir(dir, filepath.Join(dir, "..", "evil.txt")) {
+		t.Fatal("traversal should be rejected")
+	}
+}
+
+func TestRunRejectsTraversal(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := manifest.New("https://x", []manifest.Entry{
+		{URL: "https://x/evil", LocalPath: "../evil.txt", Kind: manifest.KindVideoText, Status: manifest.StatusDownloaded},
+	})
+	mp := filepath.Join(dir, "manifest.json")
+	if err := m.WriteFile(mp); err != nil {
+		t.Fatal(err)
+	}
+	sum, err := Run(Options{ManifestPath: mp, DataDir: dataDir, IndexPath: filepath.Join(dir, "index.json")}, &strings.Builder{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sum.Failed != 1 || sum.Indexed != 0 {
+		t.Fatalf("failed/indexed = %d/%d", sum.Failed, sum.Indexed)
+	}
+}
+
 func TestRunMissingManifest(t *testing.T) {
 	if _, err := Run(Options{
 		ManifestPath: filepath.Join(t.TempDir(), "nope.json"),

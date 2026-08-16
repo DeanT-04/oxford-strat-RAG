@@ -23,8 +23,8 @@ const (
 	DefaultTimeout     = 30 * time.Second
 	DefaultRetries     = 3
 	DefaultPoliteness  = 250 * time.Millisecond
-	DefaultMaxFileSize = 512 << 20             // 512 MiB per file
-	DefaultKinds       = "pdf,html,video-text" // content kinds gathered by scrape
+	DefaultMaxFileSize = 512 << 20                   // 512 MiB per file
+	DefaultKinds       = "pdf,html,links,video-text" // content kinds gathered by scrape
 	// DefaultArticlesURL is the authoritative article-library index.
 	DefaultArticlesURL = "https://oxfordstrat.com/resources/articles/"
 )

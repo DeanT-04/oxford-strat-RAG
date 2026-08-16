@@ -234,15 +234,10 @@ func TestRunHTMLArticle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Count != 2 {
-		t.Fatalf("manifest count = %d (article + links pointer)", m.Count)
+	if m.Count != 1 {
+		t.Fatalf("manifest count = %d", m.Count)
 	}
-	var e manifest.Entry
-	for _, ent := range m.Entries {
-		if ent.Kind == "html" {
-			e = ent
-		}
-	}
+	e := m.Entries[0]
 	if e.Kind != "html" {
 		t.Fatalf("kind = %q", e.Kind)
 	}
@@ -339,15 +334,10 @@ func TestRunIdeasPerson(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m.Count != 2 {
-		t.Fatalf("count = %d (idea + links pointer)", m.Count)
+	if m.Count != 1 {
+		t.Fatalf("count = %d", m.Count)
 	}
-	var e manifest.Entry
-	for _, ent := range m.Entries {
-		if ent.Kind == "html" {
-			e = ent
-		}
-	}
+	e := m.Entries[0]
 	if e.Kind != "html" || e.Person != "kahneman" {
 		t.Fatalf("entry = %+v", e)
 	}
@@ -373,7 +363,7 @@ func TestRunLinksCapture(t *testing.T) {
 
 	dir := t.TempDir()
 	cfg := baseConfig(srv, dir)
-	cfg.Kinds = "pdf"
+	cfg.Kinds = "pdf,links"
 
 	var out, errb strings.Builder
 	if _, err := Run(context.Background(), cfg, &out, &errb); err != nil {
@@ -396,6 +386,20 @@ func TestRunLinksCapture(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no kind=links reference entry: %+v", m.Entries)
+	}
+}
+
+func TestSlugFromURL(t *testing.T) {
+	cases := map[string]string{
+		"https://www.ted.com/talks/daniel_kahneman_the_riddle_of_experience_vs_memory": "daniel_kahneman_the_riddle_of_experience_vs_memory",
+		"https://www.ted.com/talks/../../etc/passwd":                                   "passwd",
+		"https://www.ted.com/talks/":                                                   "talk",
+		"https://x.com/t/my_talk's":                                                    "my_talk_s",
+	}
+	for in, want := range cases {
+		if got := slugFromURL(in); got != want {
+			t.Errorf("slugFromURL(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

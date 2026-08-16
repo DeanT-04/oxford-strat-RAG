@@ -10,7 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 )
@@ -84,8 +86,49 @@ func New(opts Options) *Client {
 	c.http = &http.Client{
 		Transport: transport,
 		Timeout:   c.timeout,
+		// Reject redirects to loopback/private/link-local/metadata targets so
+		// a fetched page cannot retarget the scraper at local services (SSRF).
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			return checkSafeURL(req.URL)
+		},
 	}
 	return c
+}
+
+// checkSafeURL rejects non-http(s) and unsafe (loopback/private/link-local/
+// metadata) destinations, resolving hostnames so DNS rebinding cannot point a
+// redirect at a private address.
+func checkSafeURL(u *url.URL) error {
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("refusing unsafe scheme %q", u.Scheme)
+	}
+	host := u.Hostname()
+	if ip := net.ParseIP(host); ip != nil {
+		if isUnsafeIP(ip) {
+			return fmt.Errorf("refusing unsafe host %q", host)
+		}
+		return nil
+	}
+	addrs, err := net.DefaultResolver.LookupIPAddr(context.Background(), host)
+	if err != nil {
+		return nil // let the transport surface the resolution error
+	}
+	for _, a := range addrs {
+		if isUnsafeIP(a.IP) {
+			return fmt.Errorf("refusing unsafe host %q (%s)", host, a.IP)
+		}
+	}
+	return nil
+}
+
+// isUnsafeIP reports whether ip is loopback, private, link-local, multicast,
+// or unspecified — all destinations a scraper must never be redirected to.
+func isUnsafeIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()
 }
 
 // Get fetches a full document body (capped at maxHTMLBytes) with retries.

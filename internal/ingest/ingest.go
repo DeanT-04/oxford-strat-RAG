@@ -142,6 +142,9 @@ func Run(opts Options, stderr io.Writer) (Summary, error) {
 // htmltext, and video transcripts are read as raw text.
 func extractEntryText(e manifest.Entry, dataDir string, extractor text.Extractor) (string, error) {
 	path := filepath.Join(dataDir, e.LocalPath)
+	if !withinDir(dataDir, path) {
+		return "", fmt.Errorf("local path escapes data dir: %q", e.LocalPath)
+	}
 	switch e.KindOf() {
 	case manifest.KindHTML:
 		b, err := os.ReadFile(path)
@@ -162,4 +165,21 @@ func extractEntryText(e manifest.Entry, dataDir string, extractor text.Extractor
 	default:
 		return extractor.Extract(path)
 	}
+}
+
+// withinDir reports whether path resolves inside dir (no traversal escape).
+func withinDir(dir, path string) bool {
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absDir, absPath)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }

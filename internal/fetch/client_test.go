@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -336,5 +337,33 @@ func TestStreamDeadlineDuringBackoff(t *testing.T) {
 	_, err := c.Stream(ctx, srv.URL)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("want deadline exceeded, got %v", err)
+	}
+}
+
+func TestCheckSafeURL(t *testing.T) {
+	ok := []string{
+		"https://oxfordstrat.com/x.pdf",
+		"http://www.cmegroup.com/x.pdf",
+		"https://papers.ssrn.com/delivery.php",
+	}
+	for _, u := range ok {
+		parsed, _ := url.Parse(u)
+		if err := checkSafeURL(parsed); err != nil {
+			t.Errorf("checkSafeURL(%q) should be safe, got %v", u, err)
+		}
+	}
+	bad := []string{
+		"http://127.0.0.1:8080/",
+		"http://169.254.169.254/latest/meta-data/",
+		"http://10.0.0.1/",
+		"http://192.168.1.1/",
+		"http://[::1]/",
+		"file:///etc/passwd",
+	}
+	for _, u := range bad {
+		parsed, _ := url.Parse(u)
+		if err := checkSafeURL(parsed); err == nil {
+			t.Errorf("checkSafeURL(%q) should be rejected", u)
+		}
 	}
 }

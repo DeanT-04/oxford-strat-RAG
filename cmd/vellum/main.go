@@ -244,7 +244,7 @@ Scrape flags:
   -resume       skip already-downloaded files
   -dry-run      discover only, no downloads
   -verbose      verbose logging
-  -kinds        kinds to gather             (default pdf,html)
+  -kinds        kinds to gather             (default pdf,html,links,video-text)
   -articles     article-library index URL
 
 Environment (overrides defaults, flags win):

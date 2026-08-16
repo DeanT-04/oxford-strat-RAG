@@ -413,9 +413,19 @@ func ResolveSSRNPDF(ctx context.Context, f Fetcher, abstractURL string) (string,
 		return "", err
 	}
 	for _, a := range anchors {
-		if strings.Contains(strings.ToLower(a.href), "delivery.php") {
-			return a.href, nil
+		if !strings.Contains(strings.ToLower(a.href), "delivery.php") {
+			continue
 		}
+		// Only accept a delivery link on SSRN itself, so a compromised page
+		// cannot retarget the downloader.
+		u, err := url.Parse(a.href)
+		if err != nil {
+			continue
+		}
+		if h := normalizeHost(u.Host); h != "ssrn.com" && h != "papers.ssrn.com" {
+			continue
+		}
+		return a.href, nil
 	}
 	return "", fmt.Errorf("ssrn: no delivery link on %s", abstractURL)
 }
@@ -435,7 +445,7 @@ func classifyArticleLink(u *url.URL, selfHost, title string) (ArticleLink, bool)
 	switch {
 	case isPDFURL(u) || isPDFDownloadURL(u):
 		link.Kind = ArticlePDF
-	case host == "papers.ssrn.com" && strings.Contains(u.RawQuery, "abstract_id"):
+	case strings.HasSuffix(host, "ssrn.com") && strings.Contains(strings.ToLower(u.RawQuery), "abstract"):
 		link.Kind = ArticleSSRN
 	case host == "store.traders.com":
 		link.Kind = ArticleReference

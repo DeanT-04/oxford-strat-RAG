@@ -89,17 +89,24 @@ func Run(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) (Summ
 
 	// The links directory is a curated pointer list, captured for completeness
 	// even when no downloadable content is found.
-	if linkEntry, err := captureLinks(ctx, client, cfg); err == nil {
-		entries = append(entries, *linkEntry)
-		sum.Referenced++
-	} else {
-		logger.Warn("links capture failed", "err", err)
+	if cfg.HasKind(manifest.KindLinks) {
+		if linkEntry, err := captureLinks(ctx, client, cfg); err == nil {
+			entries = append(entries, *linkEntry)
+			sum.Referenced++
+		} else {
+			logger.Warn("links capture failed", "err", err)
+		}
 	}
 
 	// Video transcripts (TED) are gathered into kind=video-text entries; the
 	// non-TED talk (and any fetch failure) is recorded as a reference.
 	if cfg.HasKind(manifest.KindVideoText) {
 		if videoEntries, err := gatherVideos(ctx, client, cfg, logger); err == nil {
+			for _, e := range videoEntries {
+				if e.Status == manifest.StatusReference {
+					sum.Referenced++
+				}
+			}
 			entries = append(entries, videoEntries...)
 		} else {
 			logger.Warn("video gather failed", "err", err)
@@ -353,8 +360,12 @@ func gatherVideos(ctx context.Context, client *fetch.Client, cfg config.Config, 
 	var entries []manifest.Entry
 	for _, v := range videos {
 		kind, sourceURL, speaker, err := crawl.ResolveTalkSource(ctx, client, v.URL)
+		entryURL := sourceURL
+		if entryURL == "" {
+			entryURL = v.URL
+		}
 		entry := manifest.Entry{
-			URL:             sourceURL,
+			URL:             entryURL,
 			Kind:            manifest.KindVideo,
 			Status:          manifest.StatusReference,
 			Host:            crawl.HostExternal,
@@ -412,7 +423,9 @@ func gatherVideos(ctx context.Context, client *fetch.Client, cfg config.Config, 
 	return entries, nil
 }
 
-// slugFromURL returns the final path segment of a URL (the TED talk slug).
+// slugFromURL returns the final path segment of a URL (the TED talk slug),
+// sanitized to a safe filename token (alphanumeric, dash, underscore) so it
+// can never traverse out of the output directory.
 func slugFromURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -422,7 +435,20 @@ func slugFromURL(rawURL string) string {
 	if i := strings.LastIndex(seg, "/"); i >= 0 {
 		seg = seg[i+1:]
 	}
-	return strings.Trim(seg, "/")
+	seg = strings.Trim(seg, "/")
+	var b strings.Builder
+	for _, r := range seg {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "talk"
+	}
+	return b.String()
 }
 
 // sha256hex returns the hex SHA-256 of s.

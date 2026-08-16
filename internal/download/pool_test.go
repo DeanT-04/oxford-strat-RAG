@@ -376,6 +376,15 @@ func TestAlternateURLsInvalid(t *testing.T) {
 	}
 }
 
+func TestAlternateURLsNoDowngrade(t *testing.T) {
+	// A https URL must never produce an http (plaintext) variant.
+	for _, u := range alternateURLs("https://example.com/a.pdf") {
+		if strings.HasPrefix(u, "http://") {
+			t.Fatalf("https URL downgraded to plaintext: %q", u)
+		}
+	}
+}
+
 func TestSanitizeNameExt(t *testing.T) {
 	cases := []struct{ in, ext, want string }{
 		{"https://x.com/trading-strategies/nr7/", ".html", "nr7.html"},

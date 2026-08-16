@@ -379,11 +379,10 @@ func alternateURLs(rawURL string) []string {
 		}
 	}
 
+	// Only ever upgrade http -> https; never downgrade to plaintext.
 	swapScheme := func(v *url.URL) {
 		if v.Scheme == "http" {
 			v.Scheme = "https"
-		} else if v.Scheme == "https" {
-			v.Scheme = "http"
 		}
 	}
 	toggleWWW := func(v *url.URL) {
