@@ -1,4 +1,6 @@
-# Vellum
+<p align="center">
+  <img src="docs/images/banner.png" alt="Vellum — Oxford Strat 研究 RAG" width="100%">
+</p>
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-B88746?style=flat&labelColor=002147" alt="License: MIT"></a>
