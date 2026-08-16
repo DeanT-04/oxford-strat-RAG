@@ -1,0 +1,29 @@
+# --- Build artifacts ---
+/bin/
+/dist/
+/vellum
+/vellum.exe
+*.test
+*.out
+*.exe
+
+# --- Scraped data (never commit downloaded PDFs or manifests) ---
+/data/
+
+# --- Go ---
+/vendor/
+go.work
+go.work.sum
+
+# --- Coverage ---
+coverage.out
+*.coverprofile
+coverage.html
+
+# --- Editor / OS ---
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db

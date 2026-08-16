@@ -1,0 +1,109 @@
+# AGENTS.md — Vellum (oxford-strat-RAG)
+
+> This file is the **evolving system prompt** for every agent (human or AI)
+> that works in this repository. It is a living document: when you learn
+> something that changes how work should be done here, update this file and
+> commit it in the same change. It is read before any non-trivial work.
+
+## Project
+
+**Vellum** is an ultra-lightweight research RAG for Oxford Capital
+Strategies' public-domain trading literature (https://oxfordstrat.com).
+It crawls the site, downloads every PDF, and indexes them so a user can ask
+questions and get grounded, cited answers — without needing a GPU or any
+paid LLM API.
+
+- Repo: https://github.com/DeanT-04/oxford-strat-RAG
+- License: MIT
+- Language: **Go** (single static binary; no runtime deps)
+- Target hardware budget: **≤ 60% of CPU/memory** (AMD Ryzen 7 3700U, 14 GB
+  RAM, integrated Vega 10 GPU). "Feels beefy" comes from smart retrieval,
+  not raw compute.
+
+## Commands
+
+```sh
+go build ./...          # compile everything
+go vet ./...            # static analysis (must stay clean)
+go test ./...           # run all tests
+go test -cover ./...    # coverage summary
+go test -coverprofile=coverage.out ./... && go tool cover -func=coverage.out
+go run ./cmd/vellum scrape -dry-run -verbose   # discover-only dry run
+go run ./cmd/vellum scrape                     # full download run
+go run ./cmd/vellum version
+```
+
+Binary name is `vellum`. Build a release binary with
+`go build -ldflags "-s -w -X main.version=<tag>" -o bin/vellum ./cmd/vellum`.
+
+## Layout & architecture
+
+```
+cmd/vellum/        thin CLI: flag parsing only; no logic
+internal/config/   defaults + env + validation (no I/O besides injected getenv)
+internal/fetch/    polite, retrying HTTP client (UA, backoff, size caps)
+internal/crawl/    BFS discovery of PDF links (same-host, depth-limited)
+internal/download/ worker pool: streaming, atomic writes, sha256, resume
+internal/manifest/ JSON manifest (atomic write) — consumed by the RAG phase
+internal/app/      composition root wiring the flow end-to-end
+docs/              multi-language docs (EN + zh-CN)
+```
+
+Dependency direction is strict: `app -> {config, fetch, crawl, download,
+manifest}`. Lower packages never import higher ones. Interfaces are defined
+by the consumer (`crawl.Fetcher`, `download.Fetcher`) for testability.
+
+## Coding standards
+
+- **Errors**: wrap with `fmt.Errorf("context: %w", err)`. No panics in
+  library code. Sentinel errors only where a caller must match them.
+- **Context**: every function that can block takes `context.Context` first
+  and honours cancellation.
+- **Logging**: `log/slog` only (structured). Never log secrets or file
+  contents. Verbose output is Info; default is Warn/Error.
+- **Determinism**: sort discovered links; assign filenames up front so
+  results are stable across runs.
+- **Simplicity**: start with the simplest correct solution; add a building
+  block only when the current design provably needs it. Standard library
+  first; the only external dep is `golang.org/x/net/html`.
+
+## Security rules (non-negotiable)
+
+- Validate every URL: scheme must be http/https; never follow file://.
+- Never trust remote path segments: derive filenames from the URL basename,
+  strip illegal chars, and guard with `safeJoin` (refuse `..` / separators).
+- All HTTP requests get a timeout and a size cap; never buffer unbounded.
+- Secrets come from the environment only; nothing hard-coded.
+- Atomic writes (temp file + rename) for every artifact on disk.
+
+## Testing policy
+
+- Tests live next to code (`*_test.go`) using `testing` + `net/http/httptest`.
+- Unit tests must **never touch the network**; use httptest or stubs.
+- Strive for **100% coverage** on pure logic; keep orchestration near it.
+- Table-driven tests preferred. Test like the user: run the real binary
+  against the live site before marking a feature done.
+- `go vet` and `go test ./...` must pass before every commit.
+
+## Git workflow
+
+- Conventional commit messages (`feat:`, `fix:`, `docs:`, `test:`, `chore:`).
+- Small, atomic commits — one logical change each.
+- Never commit `data/` (downloaded PDFs/manifests) — it is gitignored.
+- Push to `main`; open a PR for anything a reviewer should see.
+
+## Roadmap (build order)
+
+1. ✅ Scraper (this phase): `vellum scrape` → `data/manifest.json`.
+2. Ingest: extract text from PDFs, chunk, index (hybrid BM25 + lightweight
+   dense embeddings; no GPU).
+3. Query: `vellum query "..."` returns ranked chunks + citations.
+4. Skill: wrap the query CLI in a Reasonix skill so the agent answers
+   grounded in retrieved context — **no extra LLM API key, no Ollama needed**
+   (the host agent supplies the language model).
+
+## How to evolve this file
+
+When the project changes (new command, new invariant, a lesson learned), edit
+the relevant section here and commit it with the change it documents. Keep it
+short enough to actually be read: prefer rules over prose.
