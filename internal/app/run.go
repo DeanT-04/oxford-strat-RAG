@@ -401,7 +401,7 @@ func gatherVideos(ctx context.Context, client *fetch.Client, cfg config.Config, 
 			continue
 		}
 
-		local := filepath.Join("videos", slugFromURL(sourceURL)+".txt")
+		local := "videos/" + slugFromURL(sourceURL) + ".txt" // forward slash: portable in JSON
 		if err := writeFileAtomic(filepath.Join(cfg.OutputDir, local), []byte(text)); err != nil {
 			entry.Error = err.Error()
 			entries = append(entries, entry)

@@ -20,9 +20,11 @@ type Result struct {
 	Title  string // page <title>, trimmed
 }
 
-// skipTags are whole subtrees that never contribute body text.
+// skipTags are whole subtrees that never contribute body text. Note: "header"
+// is deliberately absent — some WordPress templates emit an unclosed <header>,
+// so skipping it would swallow the entire article body.
 var skipTags = map[string]bool{
-	"script": true, "style": true, "nav": true, "header": true,
+	"script": true, "style": true, "nav": true,
 	"footer": true, "form": true, "noscript": true, "iframe": true,
 	"svg": true, "aside": true,
 }

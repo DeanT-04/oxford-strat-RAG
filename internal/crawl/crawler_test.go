@@ -550,6 +550,36 @@ func TestResolveTalkSourceTED(t *testing.T) {
 	}
 }
 
+func TestResolveTalkSourceTEDLangPrefixed(t *testing.T) {
+	f := &mapFetcher{pages: map[string]string{
+		"https://example.com/resources/videos/ariely-control/": `
+			<html><head><title>Dan Ariely - Oxfordstrat</title></head><body>
+			<iframe src="https://embed.ted.com/talks/lang/en/dan_ariely_asks_are_we_in_control_of_our_own_decisions"></iframe>
+			</body></html>`,
+	}}
+	kind, source, _, err := ResolveTalkSource(context.Background(), f, "https://example.com/resources/videos/ariely-control/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind != "ted" || source != "https://www.ted.com/talks/dan_ariely_asks_are_we_in_control_of_our_own_decisions" {
+		t.Fatalf("kind=%q source=%q", kind, source)
+	}
+}
+
+func TestStripLangPrefix(t *testing.T) {
+	cases := map[string]string{
+		"lang/en/dan_ariely_asks":    "dan_ariely_asks",
+		"daniel_kahneman_the_riddle": "daniel_kahneman_the_riddle",
+		"lang/fr/lang/en/some_talk":  "some_talk",
+		"lang/en":                    "",
+	}
+	for in, want := range cases {
+		if got := stripLangPrefix(in); got != want {
+			t.Errorf("stripLangPrefix(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestResolveTalkSourceYouTube(t *testing.T) {
 	f := &mapFetcher{pages: map[string]string{
 		"https://example.com/resources/videos/managed-futures-1/": `

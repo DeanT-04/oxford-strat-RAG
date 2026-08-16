@@ -666,6 +666,7 @@ func ResolveTalkSource(ctx context.Context, f Fetcher, pageURL string) (kind, so
 				src := resolveURL(base, attr.Val)
 				if i := strings.Index(src, "embed.ted.com/talks/"); i >= 0 {
 					slug := strings.Trim(strings.TrimPrefix(src[i:], "embed.ted.com/talks/"), "/")
+					slug = stripLangPrefix(slug)
 					if slug != "" {
 						kind = "ted"
 						sourceURL = "https://www.ted.com/talks/" + slug
@@ -708,6 +709,21 @@ func pageTitle(doc *html.Node) string {
 	}
 	walk(doc)
 	return title
+}
+
+// stripLangPrefix removes a leading "lang/<code>/" segment from a TED slug,
+// since some embeds are language-prefixed (embed.ted.com/talks/lang/en/<slug>)
+// while the canonical talk URL is the bare slug.
+func stripLangPrefix(slug string) string {
+	for strings.HasPrefix(slug, "lang/") {
+		rest := slug[len("lang/"):]
+		i := strings.Index(rest, "/")
+		if i < 0 {
+			return ""
+		}
+		slug = rest[i+1:]
+	}
+	return slug
 }
 
 // speakerFromTitle extracts the speaker from a video page title like

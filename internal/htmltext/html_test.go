@@ -46,6 +46,28 @@ func TestExtract(t *testing.T) {
 	}
 }
 
+func TestExtractUnclosedHeader(t *testing.T) {
+	// Some WordPress templates emit <header> without a closing tag, so the
+	// HTML parser nests the whole article inside it. Skipping <header> would
+	// therefore swallow the article body — this must not happen.
+	body := []byte(`<html><head><title>T</title></head><body>
+		<div class="main">
+			<header id="header"><a href="/">Oxfordstrat</a>
+			<div class="content">
+				<p>The NR7 setup looks for the narrowest range of the last seven bars.</p>
+			</div>
+			<aside>sidebar</aside>
+		</div>
+	</body></html>`)
+	res, err := Extract(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Text, "narrowest range") {
+		t.Fatalf("article body lost when header is unclosed: %q", res.Text)
+	}
+}
+
 func TestExtractRatingBold(t *testing.T) {
 	body := []byte(`<html><body><p>Rating: A / B / <strong>C</strong> / D</p></body></html>`)
 	res, err := Extract(body)
