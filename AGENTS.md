@@ -50,6 +50,8 @@ internal/download/ worker pool: streaming, atomic writes, sha256, resume
 internal/manifest/ JSON manifest (atomic write)
 internal/text/     PDF -> text (pdftotext + pure-Go fallback) + tokenizer
 internal/htmltext/ HTML -> text (article body + rating + title)
+internal/transcript/ TED transcript extraction (JSON-LD / __NEXT_DATA__)
+internal/links/    data/links.json curation (grouped external links)
 internal/chunk/    paragraph/sentence chunking with source metadata
 internal/index/    BM25 index: build, search, JSON persistence
 internal/ingest/   manifest -> text -> chunk -> index -> save
@@ -123,8 +125,14 @@ higher ones. Interfaces are defined by the consumer (`crawl.Fetcher`,
 8. ✅ Links directory: `/resources/links/` is captured to `data/links.json`
    (grouped external links + partner blurbs, never fetched/indexed) with a
    `kind: links` manifest pointer; `vellum links [group]` lists it.
-9. Future: dense (semantic) embeddings behind the `Extractor`/index seam,
-   OCR for scanned PDFs, `vellum serve` HTTP interface.
+9. ✅ Video transcripts: the 17 TED talks under `/resources/videos/` are
+   resolved to their canonical talk and their transcripts fetched and indexed
+   as `kind: video-text` (speaker + talk title + source URL); the non-TED
+   CTA Masterclass is recorded as `kind: video` `needs_transcript` reference.
+   `vellum videos` shows coverage.
+10. Future: dense (semantic) embeddings behind the `Extractor`/index seam,
+    OCR for scanned PDFs, `vellum serve` HTTP interface, STT for the CTA
+    Masterclass.
 
 ## How to evolve this file
 

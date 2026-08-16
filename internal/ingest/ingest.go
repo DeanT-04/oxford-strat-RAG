@@ -117,6 +117,7 @@ func Run(opts Options, stderr io.Writer) (Summary, error) {
 				Title:     title,
 				Kind:      e.KindOf(),
 				SourceURL: e.URL,
+				Speaker:   e.Speaker,
 			},
 			raw, opts.MaxChunk, opts.MinChunk,
 		)

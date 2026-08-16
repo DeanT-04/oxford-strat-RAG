@@ -5,6 +5,8 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -22,6 +24,7 @@ import (
 	"github.com/DeanT-04/oxford-strat-RAG/internal/htmltext"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/links"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/manifest"
+	"github.com/DeanT-04/oxford-strat-RAG/internal/transcript"
 )
 
 // Summary reports the outcome of a run.
@@ -91,6 +94,16 @@ func Run(ctx context.Context, cfg config.Config, stdout, stderr io.Writer) (Summ
 		sum.Referenced++
 	} else {
 		logger.Warn("links capture failed", "err", err)
+	}
+
+	// Video transcripts (TED) are gathered into kind=video-text entries; the
+	// non-TED talk (and any fetch failure) is recorded as a reference.
+	if cfg.HasKind(manifest.KindVideoText) {
+		if videoEntries, err := gatherVideos(ctx, client, cfg, logger); err == nil {
+			entries = append(entries, videoEntries...)
+		} else {
+			logger.Warn("video gather failed", "err", err)
+		}
 	}
 
 	if len(targets) == 0 {
@@ -319,6 +332,125 @@ func captureLinks(ctx context.Context, client *fetch.Client, cfg config.Config) 
 		FoundOn:   cfg.SeedURL,
 		FetchedAt: time.Now(),
 	}, nil
+}
+
+// gatherVideos discovers the video talks, resolves each talk's source, and
+// fetches TED transcripts into kind=video-text manifest entries. The non-TED
+// talk and any transcript that cannot be obtained become kind=video reference
+// entries flagged needs_transcript — never a silent gap, never a fake
+// transcript.
+func gatherVideos(ctx context.Context, client *fetch.Client, cfg config.Config, logger *slog.Logger) ([]manifest.Entry, error) {
+	videosURL := strings.TrimSuffix(cfg.SeedURL, "/") + "/videos/"
+	cr, err := crawl.New(client, cfg.SeedURL, 0)
+	if err != nil {
+		return nil, err
+	}
+	videos, err := cr.DiscoverVideos(ctx, videosURL)
+	if err != nil {
+		return nil, err
+	}
+
+	var entries []manifest.Entry
+	for _, v := range videos {
+		kind, sourceURL, speaker, err := crawl.ResolveTalkSource(ctx, client, v.URL)
+		entry := manifest.Entry{
+			URL:             sourceURL,
+			Kind:            manifest.KindVideo,
+			Status:          manifest.StatusReference,
+			Host:            crawl.HostExternal,
+			Title:           v.Title,
+			Speaker:         speaker,
+			FoundOn:         v.URL,
+			FetchedAt:       time.Now(),
+			NeedsTranscript: true,
+		}
+		if err != nil || kind != "ted" {
+			if err != nil {
+				entry.Error = err.Error()
+				logger.Warn("video source resolution failed", "page", v.URL, "err", err)
+			} else {
+				logger.Warn("video captions unavailable", "page", v.URL)
+			}
+			entries = append(entries, entry)
+			continue
+		}
+
+		body, err := client.Get(ctx, sourceURL)
+		if err != nil {
+			entry.Error = err.Error()
+			entries = append(entries, entry)
+			logger.Warn("transcript fetch failed", "talk", sourceURL, "err", err)
+			continue
+		}
+		text, event, err := transcript.TED(body)
+		if err != nil {
+			entry.Error = err.Error()
+			entries = append(entries, entry)
+			logger.Warn("transcript extract failed", "talk", sourceURL, "err", err)
+			continue
+		}
+
+		local := filepath.Join("videos", slugFromURL(sourceURL)+".txt")
+		if err := writeFileAtomic(filepath.Join(cfg.OutputDir, local), []byte(text)); err != nil {
+			entry.Error = err.Error()
+			entries = append(entries, entry)
+			logger.Warn("transcript write failed", "talk", sourceURL, "err", err)
+			continue
+		}
+
+		entry.Kind = manifest.KindVideoText
+		entry.Status = manifest.StatusDownloaded
+		entry.LocalPath = local
+		entry.Size = int64(len(text))
+		entry.SHA256 = sha256hex(text)
+		entry.ContentType = "text/plain; charset=UTF-8"
+		entry.Event = event
+		entry.License = "CC BY-NC-ND 4.0"
+		entry.NeedsTranscript = false
+		entries = append(entries, entry)
+	}
+	return entries, nil
+}
+
+// slugFromURL returns the final path segment of a URL (the TED talk slug).
+func slugFromURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	seg := u.Path
+	if i := strings.LastIndex(seg, "/"); i >= 0 {
+		seg = seg[i+1:]
+	}
+	return strings.Trim(seg, "/")
+}
+
+// sha256hex returns the hex SHA-256 of s.
+func sha256hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// writeFileAtomic writes data to path via temp file + rename.
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".video-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 // hostOf classifies a URL as oxfordstrat (same host as selfHost) or external.

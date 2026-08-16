@@ -510,6 +510,94 @@ func TestWebsiteURL(t *testing.T) {
 	}
 }
 
+func TestDiscoverVideos(t *testing.T) {
+	f := &mapFetcher{pages: map[string]string{
+		"https://example.com/resources/videos/": `
+			<a href="/resources/videos/kahneman-experience/">The Riddle of Experience vs. Memory</a>
+			<a href="/resources/videos/managed-futures-1/">CTA Masterclass</a>
+			<a href="/resources/videos/">Videos</a>
+		`,
+	}}
+	c, _ := New(f, "https://example.com/resources/", 0)
+	vids, err := c.DiscoverVideos(context.Background(), "https://example.com/resources/videos/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vids) != 2 {
+		t.Fatalf("got %d videos: %+v", len(vids), vids)
+	}
+	if vids[0].Title != "The Riddle of Experience vs. Memory" || vids[1].Title != "CTA Masterclass" {
+		t.Fatalf("videos = %+v", vids)
+	}
+}
+
+func TestResolveTalkSourceTED(t *testing.T) {
+	f := &mapFetcher{pages: map[string]string{
+		"https://example.com/resources/videos/kahneman-experience/": `
+			<html><head><title>Daniel Kahneman - Oxfordstrat</title></head><body>
+			<iframe src="https://embed.ted.com/talks/daniel_kahneman_the_riddle_of_experience_vs_memory"></iframe>
+			</body></html>`,
+	}}
+	kind, source, speaker, err := ResolveTalkSource(context.Background(), f, "https://example.com/resources/videos/kahneman-experience/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind != "ted" || source != "https://www.ted.com/talks/daniel_kahneman_the_riddle_of_experience_vs_memory" {
+		t.Fatalf("kind=%q source=%q", kind, source)
+	}
+	if speaker != "Daniel Kahneman" {
+		t.Fatalf("speaker = %q", speaker)
+	}
+}
+
+func TestResolveTalkSourceYouTube(t *testing.T) {
+	f := &mapFetcher{pages: map[string]string{
+		"https://example.com/resources/videos/managed-futures-1/": `
+			<html><head><title>Managed Futures - Oxfordstrat</title></head><body>
+			<iframe src="https://www.youtube.com/embed/abc123"></iframe>
+			</body></html>`,
+	}}
+	kind, source, _, err := ResolveTalkSource(context.Background(), f, "https://example.com/resources/videos/managed-futures-1/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kind != "youtube" || source != "https://www.youtube.com/watch?v=abc123" {
+		t.Fatalf("kind=%q source=%q", kind, source)
+	}
+}
+
+func TestResolveTalkSourceNone(t *testing.T) {
+	f := &mapFetcher{pages: map[string]string{
+		"https://example.com/resources/videos/x/": `<html><body>no player</body></html>`,
+	}}
+	if _, _, _, err := ResolveTalkSource(context.Background(), f, "https://example.com/resources/videos/x/"); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestSpeakerFromTitle(t *testing.T) {
+	if got := speakerFromTitle("Daniel Kahneman - Oxfordstrat"); got != "Daniel Kahneman" {
+		t.Fatalf("got %q", got)
+	}
+	if got := speakerFromTitle("Managed Futures - Oxfordstrat"); got != "Managed Futures" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestExtractYouTubeID(t *testing.T) {
+	cases := map[string]string{
+		"https://www.youtube.com/embed/abc123":         "abc123",
+		"https://youtu.be/abc123":                      "abc123",
+		"https://www.youtube.com/watch?v=abc123":       "abc123",
+		"https://www.youtube.com/watch?v=abc123&t=10s": "abc123",
+	}
+	for in, want := range cases {
+		if got := extractYouTubeID(in); got != want {
+			t.Errorf("extractYouTubeID(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestResolveSSRNPDF(t *testing.T) {
 	f := &mapFetcher{pages: map[string]string{
 		"https://papers.ssrn.com/sol3/papers.cfm?abstract_id=123": `

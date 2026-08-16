@@ -12,6 +12,7 @@ import (
 	"github.com/DeanT-04/oxford-strat-RAG/internal/chunk"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/index"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/links"
+	"github.com/DeanT-04/oxford-strat-RAG/internal/manifest"
 )
 
 func TestRunDispatch(t *testing.T) {
@@ -167,5 +168,26 @@ func TestRunLinksMissing(t *testing.T) {
 	var errb strings.Builder
 	if code := run([]string{"links", "-file", filepath.Join(t.TempDir(), "nope.json")}, &strings.Builder{}, &errb); code != 1 {
 		t.Fatalf("code = %d, want 1", code)
+	}
+}
+
+func TestRunVideos(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "manifest.json")
+	m := manifest.New("https://x", []manifest.Entry{
+		{Kind: manifest.KindVideoText, Status: manifest.StatusDownloaded, Speaker: "Kahneman, D.", Title: "The Riddle", URL: "https://www.ted.com/talks/x"},
+		{Kind: manifest.KindVideo, Status: manifest.StatusReference, Speaker: "Various", Title: "CTA Masterclass", URL: "https://x/videos/mf/"},
+	})
+	if err := m.WriteFile(p); err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	if code := run([]string{"videos", "-manifest", p}, &out, &strings.Builder{}); code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	if !strings.Contains(out.String(), "indexed") || !strings.Contains(out.String(), "reference") {
+		t.Fatalf("output = %q", out.String())
+	}
+	if !strings.Contains(out.String(), "Kahneman") {
+		t.Fatalf("output = %q", out.String())
 	}
 }

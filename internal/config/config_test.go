@@ -185,10 +185,7 @@ func TestParseKinds(t *testing.T) {
 
 func TestHasKind(t *testing.T) {
 	cfg := Default()
-	if !cfg.HasKind("pdf") || !cfg.HasKind("html") {
-		t.Fatalf("default kinds should include pdf and html: %q", cfg.Kinds)
-	}
-	if cfg.HasKind("video-text") {
-		t.Fatalf("default kinds should not include video-text yet: %q", cfg.Kinds)
+	if !cfg.HasKind("pdf") || !cfg.HasKind("html") || !cfg.HasKind("video-text") {
+		t.Fatalf("default kinds should include pdf, html and video-text: %q", cfg.Kinds)
 	}
 }

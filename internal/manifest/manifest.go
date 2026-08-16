@@ -15,24 +15,26 @@ import (
 // Entry describes a single discovered resource and the result of fetching it.
 // Kind distinguishes PDFs from HTML articles, links, and video transcripts.
 type Entry struct {
-	URL         string    `json:"url"`
-	FinalURL    string    `json:"final_url,omitempty"`
-	LocalPath   string    `json:"local_path,omitempty"`
-	Size        int64     `json:"size"`
-	SHA256      string    `json:"sha256,omitempty"`
-	ContentType string    `json:"content_type,omitempty"`
-	Kind        string    `json:"kind,omitempty"`
-	Status      string    `json:"status"`
-	FoundOn     string    `json:"found_on,omitempty"`
-	Title       string    `json:"title,omitempty"`
-	Rating      string    `json:"rating,omitempty"`
-	Host        string    `json:"host,omitempty"`
-	Person      string    `json:"person,omitempty"`
-	Speaker     string    `json:"speaker,omitempty"`
-	Event       string    `json:"event,omitempty"`
-	License     string    `json:"license,omitempty"`
-	Error       string    `json:"error,omitempty"`
-	FetchedAt   time.Time `json:"fetched_at"`
+	URL         string `json:"url"`
+	FinalURL    string `json:"final_url,omitempty"`
+	LocalPath   string `json:"local_path,omitempty"`
+	Size        int64  `json:"size"`
+	SHA256      string `json:"sha256,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	Kind        string `json:"kind,omitempty"`
+	Status      string `json:"status"`
+	FoundOn     string `json:"found_on,omitempty"`
+	Title       string `json:"title,omitempty"`
+	Rating      string `json:"rating,omitempty"`
+	Host        string `json:"host,omitempty"`
+	Person      string `json:"person,omitempty"`
+	Speaker     string `json:"speaker,omitempty"`
+	Event       string `json:"event,omitempty"`
+	License     string `json:"license,omitempty"`
+	// NeedsTranscript marks a video whose transcript could not be obtained.
+	NeedsTranscript bool      `json:"needs_transcript,omitempty"`
+	Error           string    `json:"error,omitempty"`
+	FetchedAt       time.Time `json:"fetched_at"`
 }
 
 // Manifest is the top-level document written for each run.

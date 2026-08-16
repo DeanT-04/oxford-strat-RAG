@@ -56,6 +56,15 @@ const (
 	HostExternal    = "external"
 )
 
+// Video is one talk row from the videos index.
+type Video struct {
+	URL        string // oxfordstrat video page URL
+	Title      string // talk title (anchor text)
+	Speaker    string // speaker, resolved from the video page <title>
+	SourceKind string // "ted" | "youtube" | "" (unresolved)
+	SourceURL  string // canonical talk URL (ted.com / youtube.com)
+}
+
 // LinkItem is one curated external link from the links directory.
 type LinkItem struct {
 	Group string // group key (digital-libraries, research, …, partners)
@@ -576,6 +585,148 @@ func dedupeLinks(items []LinkItem) []LinkItem {
 		out = append(out, it)
 	}
 	return out
+}
+
+// DiscoverVideos parses the videos index once and returns the talk page links,
+// deduplicated and sorted.
+func (c *Crawler) DiscoverVideos(ctx context.Context, indexURL string) ([]Video, error) {
+	body, err := c.fetch.Get(ctx, indexURL)
+	if err != nil {
+		return nil, fmt.Errorf("crawl: fetch videos index %s: %w", indexURL, err)
+	}
+	base := pageBase(indexURL)
+	anchors, err := extractAnchors(base, body)
+	if err != nil {
+		return nil, fmt.Errorf("crawl: parse videos index %s: %w", indexURL, err)
+	}
+
+	seen := make(map[string]Video)
+	for _, a := range anchors {
+		u, err := url.Parse(a.href)
+		if err != nil {
+			continue
+		}
+		if normalizeHost(u.Host) != c.host {
+			continue
+		}
+		if !strings.HasPrefix(u.Path, base.Path) || u.Path == base.Path {
+			continue
+		}
+		if !isPageURL(u) {
+			continue
+		}
+		if _, ok := seen[u.String()]; !ok {
+			seen[u.String()] = Video{URL: u.String(), Title: a.text}
+		}
+	}
+
+	out := make([]Video, 0, len(seen))
+	for _, v := range seen {
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].URL < out[j].URL })
+	return out, nil
+}
+
+// ResolveTalkSource fetches a video page and resolves the embedded talk: the
+// TED slug (embed.ted.com/talks/<slug>) or the YouTube video ID, plus the
+// speaker from the page <title>.
+func ResolveTalkSource(ctx context.Context, f Fetcher, pageURL string) (kind, sourceURL, speaker string, err error) {
+	body, err := f.Get(ctx, pageURL)
+	if err != nil {
+		return "", "", "", err
+	}
+	doc, err := html.Parse(strings.NewReader(string(body)))
+	if err != nil {
+		return "", "", "", err
+	}
+	speaker = speakerFromTitle(pageTitle(doc))
+	base := pageBase(pageURL)
+
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if kind != "" {
+			return
+		}
+		if n.Type == html.ElementNode && n.Data == "iframe" {
+			for _, attr := range n.Attr {
+				if attr.Key != "src" {
+					continue
+				}
+				src := resolveURL(base, attr.Val)
+				if i := strings.Index(src, "embed.ted.com/talks/"); i >= 0 {
+					slug := strings.Trim(strings.TrimPrefix(src[i:], "embed.ted.com/talks/"), "/")
+					if slug != "" {
+						kind = "ted"
+						sourceURL = "https://www.ted.com/talks/" + slug
+						return
+					}
+				}
+				if id := extractYouTubeID(src); id != "" {
+					kind = "youtube"
+					sourceURL = "https://www.youtube.com/watch?v=" + id
+					return
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	if kind == "" {
+		return "", "", speaker, fmt.Errorf("talk source not found on %s", pageURL)
+	}
+	return kind, sourceURL, speaker, nil
+}
+
+// pageTitle returns the page <title>, trimmed.
+func pageTitle(doc *html.Node) string {
+	var title string
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if title != "" {
+			return
+		}
+		if n.Type == html.ElementNode && n.Data == "title" {
+			title = strings.TrimSpace(linkText(n))
+			return
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return title
+}
+
+// speakerFromTitle extracts the speaker from a video page title like
+// "Daniel Kahneman - Oxfordstrat".
+func speakerFromTitle(title string) string {
+	for _, sep := range []string{" - ", " | "} {
+		if i := strings.Index(title, sep); i >= 0 {
+			return strings.TrimSpace(title[:i])
+		}
+	}
+	return strings.TrimSpace(title)
+}
+
+// extractYouTubeID returns the video ID from a YouTube URL of any common shape.
+func extractYouTubeID(src string) string {
+	u, err := url.Parse(src)
+	if err != nil {
+		return ""
+	}
+	if strings.Contains(u.Host, "youtu.be") {
+		return strings.Trim(u.Path, "/")
+	}
+	if strings.Contains(u.Path, "/embed/") {
+		return pathBase(strings.TrimSuffix(u.Path, "/"))
+	}
+	if v := u.Query().Get("v"); v != "" {
+		return v
+	}
+	return ""
 }
 
 // isHeading reports whether tag is an HTML heading element.

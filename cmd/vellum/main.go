@@ -20,6 +20,7 @@ import (
 	"github.com/DeanT-04/oxford-strat-RAG/internal/config"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/ingest"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/links"
+	"github.com/DeanT-04/oxford-strat-RAG/internal/manifest"
 	"github.com/DeanT-04/oxford-strat-RAG/internal/query"
 )
 
@@ -46,6 +47,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runQuery(args[1:], stdout, stderr)
 	case "links":
 		return runLinks(args[1:], stdout, stderr)
+	case "videos":
+		return runVideos(args[1:], stdout, stderr)
 	case "version", "-v", "--version":
 		fmt.Fprintf(stdout, "vellum %s\n", version)
 		return 0
@@ -168,6 +171,34 @@ func runLinks(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func runVideos(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("videos", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	manifestPath := fs.String("manifest", "data/manifest.json", "manifest path")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	m, err := manifest.ReadFile(*manifestPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
+	}
+	for _, e := range m.Entries {
+		switch e.Kind {
+		case manifest.KindVideoText, manifest.KindVideo:
+			status := "indexed"
+			if e.Status != manifest.StatusDownloaded {
+				status = "reference"
+			}
+			fmt.Fprintf(stdout, "%-9s %-28s %s\n", status, e.Speaker, e.Title)
+			if e.URL != "" {
+				fmt.Fprintf(stdout, "          %s\n", e.URL)
+			}
+		}
+	}
+	return 0
+}
+
 func runQuery(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("query", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -196,6 +227,7 @@ Usage:
   vellum ingest [flags]   extract text from PDFs and build a BM25 index
   vellum query [flags] Q  search the index and return cited chunks
   vellum links [group]    list the curated external-links directory
+  vellum videos           list video talks and their transcript coverage
   vellum version          print the version
   vellum help             show this help
 
